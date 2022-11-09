@@ -35,10 +35,12 @@ LOG_MODULE_REGISTER(usb_dc_numaker, CONFIG_USB_DRIVER_LOG_LEVEL);
  *    See CONFIG_USB_DC_NUMAKER_USBD_WORKAROUND_DISALLOW_ISO_IN_OUT_SAME_NUM.
  */
 
-/* Not yet support HSUSBD */
-#if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
-#error "Not yet support HSUSBD"
-#endif
+/* HSUSBD notes
+ *
+ * 1. Clock requirement
+ *    (1) Require HXT for USB2.0 OTG PHY
+ *    (2) Different than USBD, core clock is not required to be multiple of 48MHz.
+ */
 
 /* Implementation notes
  *
@@ -61,6 +63,8 @@ LOG_MODULE_REGISTER(usb_dc_numaker, CONFIG_USB_DRIVER_LOG_LEVEL);
 
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
 #define DT_DRV_COMPAT nuvoton_numaker_usbd
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+#define DT_DRV_COMPAT nuvoton_numaker_hsusbd
 #endif
 
 /* Max number of endpoint slots
@@ -70,11 +74,16 @@ LOG_MODULE_REGISTER(usb_dc_numaker, CONFIG_USB_DRIVER_LOG_LEVEL);
  */
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
 #define NU_USB_DC_MAX_NUM_EP_SLOTS      DT_INST_PROP(0, num_bidir_endpoints)
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+#define NU_USB_DC_MAX_NUM_EP_SLOTS      DT_INST_PROP(0, num_bidir_endpoints)
 #endif
 
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
 BUILD_ASSERT(DT_INST_PROP(0, num_bidir_endpoints) == USBD_MAX_EP,
              "num_bidir_endpoints doesn't match BSP USBD driver");
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+BUILD_ASSERT(DT_INST_PROP(0, num_bidir_endpoints) == (HSUSBD_MAX_EP + 2),
+             "num_bidir_endpoints doesn't match BSP HSUSBD driver");  
 #endif
 
 /* Forward declarations */
@@ -103,6 +112,8 @@ struct nu_usb_dc_msg {
 struct usb_dc_numaker_config {
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
     USBD_T *    usbd_base;
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    HSUSBD_T *  hsusbd_base;
 #endif
     uint32_t    id_rst;
     uint32_t    clk_modidx;
@@ -130,6 +141,8 @@ struct nu_usb_dc_ep {
 
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
     uint8_t                     usbd_hw_ep_hndl;    // EP0, EP1, EP2, etc.
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    uint8_t                     hsusbd_hw_ep_hndl;  // CEP, EPA, EPB, etc.
 #endif
 
     bool                        dmabuf_valid;   // Endpoint DMA buffer valid
@@ -226,6 +239,9 @@ static void nu_usb_dc_msg_hdlr_thread_main(void *arg1, void *arg2, void *arg3);
 static int nu_usb_dc_send_msg(const struct usb_dc_numaker_device *dev, const struct nu_usb_dc_msg *msg);
 static int nu_usb_dc_hw_setup(struct usb_dc_numaker_device *dev);
 static void nu_usb_dc_hw_shutdown(struct usb_dc_numaker_device *dev);
+#if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+static int nu_usb_dc_hw_wait_phy_ready(struct usb_dc_numaker_device *dev, uint32_t timeout_ms);
+#endif
 static void nu_usb_dc_sw_connect(struct usb_dc_numaker_device *dev);
 static void nu_usb_dc_sw_disconnect(struct usb_dc_numaker_device *dev);
 static void nu_usb_dc_sw_reconnect(struct usb_dc_numaker_device *dev);
@@ -707,6 +723,8 @@ int usb_dc_ep_write(const uint8_t ep_addr, const uint8_t *const data_buf,
     /* Write FIFO not empty
      *
      * For USBD, don't trigger next DATA IN for one-shot implementation.
+     * For HSUSBD, don't trigger next DATA IN for one-shot implementation, or we
+     * cannot easily determine when to trigger Short Packet/ZLP for last IN transaction
      */
     if (nu_usb_dc_ep_fifo_used(ep_cur)) {
         LOG_WRN("ep_addr 0x%02x: Write FIFO not empty for one-shot implementation", ep_addr);
@@ -903,6 +921,7 @@ int usb_dc_ep_read_continue(uint8_t ep_addr)
     /* Read FIFO not empty
      *
      * For USBD, don't trigger next DATA OUT for one-shot implementation, or overwrite.
+     * For HSUSBD, don't trigger next DATA OUT for one-shot implementation.
      */
     if (nu_usb_dc_ep_fifo_used(ep_cur)) {
         goto cleanup;
@@ -980,6 +999,8 @@ K_MUTEX_DEFINE(sync_mutex_inst_0);
 static const struct usb_dc_numaker_config s_usb_dc_numaker_config_inst_0 = {
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
     .usbd_base      = (USBD_T *) DT_INST_REG_ADDR(0),
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    .hsusbd_base    = (HSUSBD_T *) DT_INST_REG_ADDR(0),
 #endif
     .id_rst         = DT_INST_PROP(0, reset),
     .clk_modidx     = DT_INST_CLOCKS_CELL(0, clock_module_index),
@@ -1225,6 +1246,162 @@ static void usb_dc_numaker_isr(struct usb_dc_numaker_device *dev)
             epintsts &= ~BIT(hw_ep_idx);
         }
     }
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    __IO uint32_t IrqStL, IrqSt;
+
+    IrqStL = config->hsusbd_base->GINTSTS & config->hsusbd_base->GINTEN;    /* get interrupt status */
+
+    if(!IrqStL)    return;
+
+    /* USB interrupt */
+    if(IrqStL & HSUSBD_GINTSTS_USBIF_Msk)
+    {
+        IrqSt = HSUSBD->BUSINTSTS & HSUSBD->BUSINTEN;
+
+        if(IrqSt & HSUSBD_BUSINTSTS_SOFIF_Msk) {
+            HSUSBD_CLR_BUS_INT_FLAG(HSUSBD_BUSINTSTS_SOFIF_Msk);
+
+            /* Message for bottom-half processing */
+            msg.msg_type = NU_USB_DC_MSG_TYPE_CB_STATE;
+            msg.cb_state.status_code = USB_DC_SOF;
+            nu_usb_dc_send_msg(dev, &msg);
+        }
+
+        if(IrqSt & HSUSBD_BUSINTSTS_RSTIF_Msk)
+        {
+            HSUSBD_CLR_BUS_INT_FLAG(HSUSBD_BUSINTSTS_RSTIF_Msk);
+
+            /* Bus reset top half */
+            nu_usb_dc_bus_reset_th(dev);
+
+            /* Message for bottom-half processing */
+            msg.msg_type = NU_USB_DC_MSG_TYPE_CB_STATE;
+            msg.cb_state.status_code = USB_DC_RESET;
+            nu_usb_dc_send_msg(dev, &msg);
+
+            LOG_INF("USB reset");
+        }
+
+        if(IrqSt & HSUSBD_BUSINTSTS_RESUMEIF_Msk)
+        {
+            HSUSBD_CLR_BUS_INT_FLAG(HSUSBD_BUSINTSTS_RESUMEIF_Msk);
+
+            HSUSBD_ENABLE_USB();
+            /* TODO: Wait for PHY ready? */
+
+            /* Message for bottom-half processing */
+            msg.msg_type = NU_USB_DC_MSG_TYPE_CB_STATE;
+            msg.cb_state.status_code = USB_DC_RESUME;
+            nu_usb_dc_send_msg(dev, &msg);
+
+            LOG_INF("USB resume");
+        }
+
+        if(IrqSt & HSUSBD_BUSINTSTS_SUSPENDIF_Msk)
+        {
+            HSUSBD_CLR_BUS_INT_FLAG(HSUSBD_BUSINTSTS_SUSPENDIF_Msk);
+
+            /* Enable USB but disable PHY */
+            HSUSBD_DISABLE_PHY();
+            
+            /* Message for bottom-half processing */
+            msg.msg_type = NU_USB_DC_MSG_TYPE_CB_STATE;
+            msg.cb_state.status_code = USB_DC_SUSPEND;
+            nu_usb_dc_send_msg(dev, &msg);
+
+            LOG_INF("USB suspend");
+        }
+
+        if(IrqSt & HSUSBD_BUSINTSTS_VBUSDETIF_Msk)
+        {
+            HSUSBD_CLR_BUS_INT_FLAG(HSUSBD_BUSINTSTS_VBUSDETIF_Msk);
+
+            if(HSUSBD_IS_ATTACHED())
+            {
+                /* USB Plug In */
+                HSUSBD_ENABLE_USB();
+                /* TODO: Wait for PHY ready? */
+
+                /* Message for bottom-half processing */
+                /* NOTE: According to Zephyr USB device stack, USB_DC_CONNECTED means H/W
+                     enumeration has completed and isn't consistent with VBUS attached
+                     here. */
+
+                LOG_INF("USB plug-in");
+            }
+            else
+            {
+                /* USB Un-plug */
+                HSUSBD_DISABLE_USB();
+                
+                /* Message for bottom-half processing */
+                msg.msg_type = NU_USB_DC_MSG_TYPE_CB_STATE;
+                msg.cb_state.status_code = USB_DC_DISCONNECTED;
+                nu_usb_dc_send_msg(dev, &msg);
+
+                LOG_INF("USB unplug");
+            }
+        }
+    }
+
+    if(IrqStL & HSUSBD_GINTSTS_CEPIF_Msk)
+    {
+        IrqSt = HSUSBD->CEPINTSTS & HSUSBD->CEPINTEN;
+
+        if(IrqSt & HSUSBD_CEPINTSTS_SETUPPKIF_Msk)
+        {
+            HSUSBD_CLR_CEP_INT_FLAG(HSUSBD_CEPINTSTS_SETUPPKIF_Msk);
+
+            config->hsusbd_base->CEPCTL = HSUSBD_CEPCTL_FLUSH_Msk;
+
+            /* Message for bottom-half processing */
+            msg.msg_type = NU_USB_DC_MSG_TYPE_CB_EP;
+            msg.cb_ep.ep_addr = USB_EP_GET_ADDR(0, USB_EP_DIR_OUT);    // In Zephyr USB device stack, Setup is combined into CTRL OUT.
+            msg.cb_ep.status_code = USB_DC_EP_SETUP;
+            nu_usb_dc_send_msg(dev, &msg);
+        }
+
+        if(IrqSt & HSUSBD_CEPINTSTS_TXPKIF_Msk)
+        {
+            HSUSBD_CLR_CEP_INT_FLAG(HSUSBD_CEPINTSTS_TXPKIF_Msk);
+
+            /* Message for bottom-half processing */
+            msg.msg_type = NU_USB_DC_MSG_TYPE_CB_EP;
+            msg.cb_ep.ep_addr = USB_EP_GET_ADDR(0, USB_EP_DIR_IN);
+            msg.cb_ep.status_code = USB_DC_EP_DATA_IN;
+            nu_usb_dc_send_msg(dev, &msg);
+        }
+
+        if(IrqSt & HSUSBD_CEPINTSTS_RXPKIF_Msk)
+        {
+            HSUSBD_CLR_CEP_INT_FLAG(HSUSBD_CEPINTSTS_RXPKIF_Msk);
+
+            /* Message for bottom-half processing */
+            msg.msg_type = NU_USB_DC_MSG_TYPE_CB_EP;
+            msg.cb_ep.ep_addr = USB_EP_GET_ADDR(0, USB_EP_DIR_OUT);
+            msg.cb_ep.status_code = USB_DC_EP_DATA_OUT;
+            nu_usb_dc_send_msg(dev, &msg);
+        }
+
+        if(IrqSt & HSUSBD_CEPINTSTS_STSDONEIF_Msk)
+        {
+            HSUSBD_CLR_CEP_INT_FLAG(HSUSBD_CEPINTSTS_STSDONEIF_Msk);
+
+            /* NOTE: See comment in usb_dc_set_address()'s implementation for safe place to
+             *       change USB device address */
+            if ((USBD_GET_ADDR() != data->addr)) {
+                USBD_SET_ADDR(data->addr);
+            }
+        }
+    }
+
+    /* TODO */
+    if(IrqStL & HSUSBD_GINTSTS_EPAIF_Msk)
+    {
+        IrqSt = HSUSBD->EP[EPA].EPINTSTS & HSUSBD->EP[EPA].EPINTEN;
+
+        HSUSBD_CLR_EP_INT_FLAG(EPA, IrqSt);
+    }
 #endif
 }
 
@@ -1357,6 +1534,12 @@ static int nu_usb_dc_hw_setup(struct usb_dc_numaker_device *dev)
     /* For USBD */
     SYS->USBPHY = (SYS->USBPHY & ~SYS_USBPHY_USBROLE_Msk) |
         (SYS_USBPHY_USBROLE_STD_USBD | SYS_USBPHY_USBEN_Msk | SYS_USBPHY_SBO_Msk);
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    /* For HSUSBD */
+    SYS->USBPHY = (SYS->USBPHY & ~(SYS_USBPHY_HSUSBROLE_Msk | SYS_USBPHY_HSUSBACT_Msk)) |
+        (SYS_USBPHY_HSUSBROLE_STD_USBD | SYS_USBPHY_HSUSBEN_Msk | SYS_USBPHY_SBO_Msk);
+    k_busy_wait(15);    // Delay > 10 us
+    SYS->USBPHY |= SYS_USBPHY_HSUSBACT_Msk;
 #endif
 
 #ifdef CONFIG_CLOCK_CONTROL_NUMAKER_SCC
@@ -1408,6 +1591,21 @@ static int nu_usb_dc_hw_setup(struct usb_dc_numaker_device *dev)
     USBD_SET_SE0();
 
     /* TODO: Respect DT maximum_speed */
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    /* Enable PHY and wait 1000 ms for ready */
+    HSUSBD_ENABLE_PHY();
+    rc = nu_usb_dc_hw_wait_phy_ready(dev, 1000);
+    if (rc < 0) {
+        LOG_ERR("Enable PHY");
+        goto cleanup;
+    }
+
+    /* Respect DT maximum_speed */
+    if (config->maximum_speed >= DT_USB_MAXIMUM_SPEED_HIGH_SPEED) {
+        config->hsusbd_base->OPER |= HSUSBD_OPER_HISPDEN_Msk;   // Initiate chirp during reset
+    } else {
+        config->hsusbd_base->OPER &= ~HSUSBD_OPER_HISPDEN_Msk;  // No chirp during reset
+    }
 #endif
 
     /* Initialize IRQ */
@@ -1433,6 +1631,9 @@ static void nu_usb_dc_hw_shutdown(struct usb_dc_numaker_device *dev)
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
     USBD_SET_SE0();
     USBD_DISABLE_PHY();
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    HSUSBD_SET_SE0();
+    HSUSBD_DISABLE_PHY();
 #endif
 
 #ifdef CONFIG_CLOCK_CONTROL_NUMAKER_SCC
@@ -1454,6 +1655,25 @@ static void nu_usb_dc_hw_shutdown(struct usb_dc_numaker_device *dev)
     SYS_LockReg();
 }
 
+/* Wait for PHY to be ready */
+#if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+static int nu_usb_dc_hw_wait_phy_ready(struct usb_dc_numaker_device *dev, uint32_t timeout_ms)
+{
+    const struct usb_dc_numaker_config *config = dev->config;
+
+    uint64_t t1 = k_ticks_to_ms_floor64(k_uptime_ticks());
+    uint64_t t2;
+    while (!(config->hsusbd_base->PHYCTL & HSUSBD_PHYCTL_PHYCLKSTB_Msk)) {
+        t2 = k_ticks_to_ms_floor64(k_uptime_ticks());
+        if ((t2 - t1) > timeout_ms) {
+            return -EIO;
+        }
+    }
+
+    return 0;
+}
+#endif
+
 /* S/W connect */
 static void nu_usb_dc_sw_connect(struct usb_dc_numaker_device *dev)
 {
@@ -1471,6 +1691,27 @@ static void nu_usb_dc_sw_connect(struct usb_dc_numaker_device *dev)
 
     /* Clear SE0 (connect) */
     USBD_CLR_SE0();
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    /* Clear USB/CEP interrupts first for clean */
+    HSUSBD_CLR_BUS_INT_FLAG(HSUSBD_GET_BUS_INT_FLAG());
+    HSUSBD_CLR_CEP_INT_FLAG(config->hsusbd_base->CEPINTSTS);
+
+    /* Enable USB/CEP (if enabled before) global interrupt */
+    HSUSBD_ENABLE_USB_INT(
+        HSUSBD_GINTEN_USBIEN_Msk |
+        (config->hsusbd_base->GINTEN & HSUSBD_GINTEN_CEPIEN_Msk)
+    );
+
+    /* Enable USB local interrupt */
+    HSUSBD_ENABLE_BUS_INT(
+        HSUSBD_BUSINTEN_VBUSDETIEN_Msk |
+        HSUSBD_BUSINTEN_SUSPENDIEN_Msk |
+        HSUSBD_BUSINTEN_RESUMEIEN_Msk |
+        HSUSBD_BUSINTEN_RSTIEN_Msk
+    );
+
+    /* Clear SE0 (connect) */
+    HSUSBD_CLR_SE0();
 #endif
 }
 
@@ -1480,6 +1721,9 @@ static void nu_usb_dc_sw_disconnect(struct usb_dc_numaker_device *dev)
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
     /* Set SE0 (disconnect) */
     USBD_SET_SE0();
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    /* Set SE0 (disconnect) */
+    HSUSBD_SET_SE0();
 #endif
 }
 
@@ -1517,6 +1761,22 @@ static void nu_usb_dc_bus_reset_th(struct usb_dc_numaker_device *dev)
         if (i >= 2) {
             USBD_CONFIG_EP(EP0 + i, 0);
         }
+    }
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    HSUSBD_ResetDMA();
+
+    /* Cause packet buffer and its corresponding HSUSBD_CEPDATCNT register to be cleared */
+    config->hsusbd_base->CEPCTL = HSUSBD_CEPCTL_FLUSH_Msk;
+
+    for (i = 0ul; i < HSUSBD_MAX_EP; i++) {
+        HSUSBD_EP_T *hsusbd_ep = config->hsusbd_base->EP + i;
+        hsusbd_ep->EPRSPCTL = 0 |
+            (!HSUSBD_EPRSPCTL_HALT_Msk) |   // Not send a STALL handshake as response
+                                            // to the token from the host
+            HSUSBD_EPRSPCTL_TOGGLE_Msk |    // Clear data toggle bit
+            HSUSBD_EPRSPCTL_FLUSH_Msk;      // Cause packet buffer to be flushed and
+                                            // corresponding EP_AVAIL register to be
+                                            // cleared
     }
 #endif
 
@@ -1556,6 +1816,8 @@ static void nu_usb_dc_reset_addr(struct usb_dc_numaker_device *dev)
 
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
     USBD_SET_ADDR(0);
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    HSUSBD_SET_ADDR(0);
 #endif
     data->addr = 0;
 }
@@ -1572,6 +1834,10 @@ static void nu_usb_dc_remote_wakeup(struct usb_dc_numaker_device *dev)
     config->usbd_base->ATTR |= USBD_ATTR_RWAKEUP_Msk;
     k_busy_wait(1000);
     config->usbd_base->ATTR ^= USBD_ATTR_RWAKEUP_Msk;
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    HSUSBD_ENABLE_USB();
+
+    config->hsusbd_base->OPER |= HSUSBD_OPER_RESUMEEN_Msk;  // Auto-clear
 #endif
 }
 
@@ -1598,11 +1864,19 @@ static void nu_usb_dc_ep_mgmt_init(struct usb_dc_numaker_device *dev)
 
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
         ep_cur->usbd_hw_ep_hndl = EP0 + (ep_cur - ep_mgmt->ep_slots);
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+        if ((ep_cur - ep_mgmt->ep_slots) < 2) {
+            ep_cur->hsusbd_hw_ep_hndl = CEP;
+        } else {
+            ep_cur->hsusbd_hw_ep_hndl = EPA + (ep_cur - ep_mgmt->ep_slots);
+        }
 #endif
 
         /* FIFO needs ownership or not */
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
         ep_cur->FIFO_need_own = true;
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+        ep_cur->FIFO_need_own = false;
 #endif
 
         /* Initialize FIFO ownership semaphore if not yet, and signal H/W doesn't own it */
@@ -1626,6 +1900,10 @@ static void nu_usb_dc_ep_mgmt_init(struct usb_dc_numaker_device *dev)
     /* Reserve for Setup/CTRL IN/CTRL OUT */
     ep_mgmt->dmabuf_pos = 8 + 64 + 64;
     ep_mgmt->dmabuf_pos_valid = true;
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    /* Reserve for CEP */
+    ep_mgmt->dmabuf_pos = 64;
+    ep_mgmt->dmabuf_pos_valid = true;
 #endif
 
     /* Configure DMA buffer for Setup packet */
@@ -1638,6 +1916,8 @@ static void nu_usb_dc_ep_mgmt_init(struct usb_dc_numaker_device *dev)
     ep_cur->ep_addr = USB_EP_GET_ADDR(0, USB_EP_DIR_OUT);
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
     nu_usb_dc_ep_config_dmabuf(ep_cur, 8, 64);
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    nu_usb_dc_ep_config_dmabuf(ep_cur, 0, 64);
 #endif
     ep_cur->ep_mps_valid = true;
     ep_cur->ep_mps = 64;
@@ -1649,6 +1929,8 @@ static void nu_usb_dc_ep_mgmt_init(struct usb_dc_numaker_device *dev)
     ep_cur->ep_addr = USB_EP_GET_ADDR(0, USB_EP_DIR_IN);
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
     nu_usb_dc_ep_config_dmabuf(ep_cur, 8 + 64, 64);
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    nu_usb_dc_ep_config_dmabuf(ep_cur, 0, 64);
 #endif
     ep_cur->ep_mps_valid = true;
     ep_cur->ep_mps = 64;
@@ -1767,6 +2049,8 @@ static void nu_usb_dc_setup_config_dmabuf(struct usb_dc_numaker_device *dev)
 
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
     config->usbd_base->STBUFSEG = 0;
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    /* For HSUSBD, there are dedicated registers SETUP1_0/3_2/5_4/7_6 for received Setup packet */
 #endif
 
     ep_mgmt->dmabuf_setup_valid = true;
@@ -1780,6 +2064,15 @@ static void nu_usb_dc_setup_fifo_copy_to_user(struct usb_dc_numaker_device *dev,
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
     uint32_t dmabuf_addr = USBD_BUF_BASE + (config->usbd_base->STBUFSEG & USBD_STBUFSEG_STBUFSEG_Msk);
     USBD_MemCopy(usrbuf, (uint8_t *) dmabuf_addr , 8ul);
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    usrbuf[0] = (uint8_t) (config->hsusbd_base->SETUP1_0 & 0xfful);
+    usrbuf[1] = (uint8_t) ((config->hsusbd_base->SETUP1_0 >> 8) & 0xfful);
+    usrbuf[2] = (uint8_t) (config->hsusbd_base->SETUP3_2 & 0xfful);
+    usrbuf[3] = (uint8_t) ((config->hsusbd_base->SETUP3_2 >> 8) & 0xfful);
+    usrbuf[4] = (uint8_t) (config->hsusbd_base->SETUP5_4 & 0xfful);
+    usrbuf[5] = (uint8_t) ((config->hsusbd_base->SETUP5_4 >> 8) & 0xfful);
+    usrbuf[6] = (uint8_t) (config->hsusbd_base->SETUP7_6 & 0xfful);
+    usrbuf[7] = (uint8_t) ((config->hsusbd_base->SETUP7_6 >> 8) & 0xfful);
 #endif
 }
 
@@ -1845,6 +2138,9 @@ static void nu_usb_dc_ep_config_dmabuf(struct nu_usb_dc_ep *ep_cur, uint32_t dma
     ARG_UNUSED(dmabuf_size);
 
     USBD_SET_EP_BUF_ADDR(ep_cur->usbd_hw_ep_hndl, dmabuf_base);
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    /* Can cover CEP */
+    HSUSBD_SetEpBufAddr(ep_cur->hsusbd_hw_ep_hndl, dmabuf_base, dmabuf_size);
 #endif
 
     ep_cur->dmabuf_valid = true;
@@ -1881,6 +2177,16 @@ static void nu_usb_dc_ep_fifo_reset(struct nu_usb_dc_ep *ep_cur)
             ep_cur->write_fifo_free = nu_usb_dc_ep_fifo_max(ep_cur);
         }
     }
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    if (USB_EP_GET_IDX(ep_cur->ep_addr == 0)) {
+        __ASSERT_NO_MSG(ep_cur->hsusbd_hw_ep_hndl == CEP);
+
+        config->hsusbd_base->CEPCTL |= HSUSBD_CEPCTL_FLUSH_Msk;
+    } else {
+        HSUSBD_EP_T *hsusbd_ep = config->hsusbd_base->EP + ep_cur->hsusbd_hw_ep_hndl;
+        uint32_t eprspctl_mode = hsusbd_ep->EPRSPCTL & HSUSBD_EPRSPCTL_MODE_Msk;
+        hsusbd_ep->EPRSPCTL = eprspctl_mode | HSUSBD_EPRSPCTL_FLUSH_Msk;
+    }
 #endif
 }
 
@@ -1911,6 +2217,21 @@ static int nu_usb_dc_ep_fifo_copy_to_user(struct nu_usb_dc_ep *ep_cur, uint8_t *
     ep_cur->read_fifo_used -= *size_p;
     if (ep_cur->read_fifo_used == 0) {
         ep_cur->read_fifo_pos = ep_cur->dmabuf_base;
+    }
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    uint8_t *usrbuf_pos = usrbuf;
+    uint8_t *usrbuf_end = usrbuf + *size_p;
+    if (USB_EP_GET_IDX(ep_cur->ep_addr == 0)) {
+        __ASSERT_NO_MSG(ep_cur->hsusbd_hw_ep_hndl == CEP);
+
+        for (; usrbuf_pos != usrbuf_end; usrbuf_pos ++) {
+            *usrbuf_pos = config->hsusbd_base->CEPDAT_BYTE;
+        }
+    } else {
+        HSUSBD_EP_T *hsusbd_ep = config->hsusbd_base->EP + ep_cur->hsusbd_hw_ep_hndl;
+        for (; usrbuf_pos != usrbuf_end; usrbuf_pos ++) {
+            *usrbuf_pos = hsusbd_ep->EPDAT_BYTE;
+        }
     }
 #endif
 
@@ -1949,6 +2270,21 @@ static int nu_usb_dc_ep_fifo_copy_from_user(struct nu_usb_dc_ep *ep_cur, const u
     if (ep_cur->write_fifo_free == 0) {
         ep_cur->write_fifo_pos = ep_cur->dmabuf_base;
     }
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    const uint8_t *usrbuf_pos = usrbuf;
+    const uint8_t *usrbuf_end = usrbuf + *size_p;
+    if (USB_EP_GET_IDX(ep_cur->ep_addr == 0)) {
+        __ASSERT_NO_MSG(ep_cur->hsusbd_hw_ep_hndl == CEP);
+
+        for (; usrbuf_pos != usrbuf_end; usrbuf_pos ++) {
+            config->hsusbd_base->CEPDAT_BYTE = *usrbuf_pos;
+        }
+    } else {
+        HSUSBD_EP_T *hsusbd_ep = config->hsusbd_base->EP + ep_cur->hsusbd_hw_ep_hndl;
+        for (; usrbuf_pos != usrbuf_end; usrbuf_pos ++) {
+            hsusbd_ep->EPDAT_BYTE = *usrbuf_pos;
+        }
+    }
 #endif
 
     return 0;
@@ -1977,6 +2313,8 @@ static void nu_usb_dc_ep_fifo_update(struct nu_usb_dc_ep *ep_cur)
         ep_cur->write_fifo_pos = ep_cur->dmabuf_base;
         ep_cur->write_fifo_free = nu_usb_dc_ep_fifo_max(ep_cur);
     }
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    /* H/W FIFO itself will handle. */
 #endif
 }
 
@@ -2007,6 +2345,18 @@ static uint32_t nu_usb_dc_ep_fifo_used(struct nu_usb_dc_ep *ep_cur)
         /* Write FIFO */
         return nu_usb_dc_ep_fifo_max(ep_cur) - ep_cur->write_fifo_free;
     }
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    /* Suppress 'unused variable' warning on some build */
+    ARG_UNUSED(nu_usb_dc_ep_fifo_max);
+
+    if (USB_EP_GET_IDX(ep_cur->ep_addr == 0)) {
+        __ASSERT_NO_MSG(ep_cur->hsusbd_hw_ep_hndl == CEP);
+
+        return ((config->hsusbd_base->CEPDATCNT & HSUSBD_CEPDATCNT_DATCNT_Msk) >> HSUSBD_CEPDATCNT_DATCNT_Pos);
+    } else {
+        HSUSBD_EP_T *hsusbd_ep = config->hsusbd_base->EP + ep_cur->hsusbd_hw_ep_hndl;
+        return ((hsusbd_ep->EPDATCNT & HSUSBD_EPDATCNT_DATCNT_Msk) >> HSUSBD_EPDATCNT_DATCNT_Pos);
+    }
 #endif
 }
 
@@ -2028,6 +2378,28 @@ static void nu_usb_dc_ep_config_major(struct nu_usb_dc_ep *ep_cur, const struct 
         ((ep_cfg->ep_type == USB_DC_EP_CONTROL) ? USBD_CFG_CSTALL : 0) |    // Clear STALL Response in SETUP stage        
         0;
     USBD_CONFIG_EP(ep_cur->usbd_hw_ep_hndl, ep_cur->usbd_hw_ep_cfg);
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    if (USB_EP_GET_IDX(ep_cur->ep_addr == 0)) {
+        __ASSERT_NO_MSG(ep_cfg->ep_type == USB_DC_EP_CONTROL);
+
+        /* CTRL OUT/IN as a whole are CEP. Use CTRL OUT as CEP and ignore CTRL IN */
+        if (USB_EP_DIR_IS_OUT(ep_cur->ep_addr)) {
+            /* No further control */
+
+            /* NOTE: No separate MPS control for CEP. It is the same as DMA buffer size */
+        }
+    } else {
+        __ASSERT_NO_MSG(ep_cfg->ep_type != USB_DC_EP_CONTROL);
+
+        HSUSBD_ConfigEp(
+            ep_cur->hsusbd_hw_ep_hndl,
+            USB_EP_GET_IDX(ep_cfg->ep_addr),
+            (ep_cfg->ep_type == USB_DC_EP_BULK) ? HSUSBD_EP_CFG_TYPE_BULK :
+                (ep_cfg->ep_type == USB_DC_EP_INTERRUPT) ? HSUSBD_EP_CFG_TYPE_INT :
+                HSUSBD_EP_CFG_TYPE_ISO,
+            USB_EP_DIR_IS_IN(ep_cur->ep_addr) ? HSUSBD_EP_CFG_DIR_IN : HSUSBD_EP_CFG_DIR_OUT
+        );
+    }
 #endif
 }
 
@@ -2037,6 +2409,12 @@ static void nu_usb_dc_ep_set_stall(struct nu_usb_dc_ep *ep_cur)
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
     /* Set EP to stalled */
     USBD_SET_EP_STALL(ep_cur->usbd_hw_ep_hndl);
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    /* Set CEP/EP to stalled
+     *
+     * NOTE: HSUSBD_SetEpStall() can cover CEP.
+     */
+    HSUSBD_SetEpStall(ep_cur->hsusbd_hw_ep_hndl);
 #endif
 }
 
@@ -2057,6 +2435,21 @@ static void nu_usb_dc_ep_clear_stall(struct nu_usb_dc_ep *ep_cur)
 
     /* Reset EP data toggle bit to 0 */
     USBD_SET_DATA0(ep_cur->usbd_hw_ep_hndl);
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    /* Reset CEP/EP to unstalled
+     *
+     * NOTE: HSUSBD_ClearEpStall() involves reset EP data toggle bit to 0.
+     * NOTE: HSUSBD_ClearEpStall() cannot cover CEP.
+     * NOTE: HSUSBD_ClearEpStall() will overwrite MODE configuration.
+     */
+    //HSUSBD_ClearEpStall(ep_cur->hsusbd_hw_ep_hndl);
+    if (ep_cur->hsusbd_hw_ep_hndl == CEP) {
+        /* Auto-clear on receipt of next Setup token */
+    } else {
+        HSUSBD_EP_T *hsusbd_ep = config->hsusbd_base->EP + ep_cur->hsusbd_hw_ep_hndl;
+        uint32_t eprspctl_mode = hsusbd_ep->EPRSPCTL & HSUSBD_EPRSPCTL_MODE_Msk;
+        hsusbd_ep->EPRSPCTL = eprspctl_mode | HSUSBD_EP_RSPCTL_TOGGLE;
+    }
 #endif
 }
 
@@ -2072,6 +2465,16 @@ static bool nu_usb_dc_ep_is_stalled(struct nu_usb_dc_ep *ep_cur)
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
     /* Is EP stalled */
     return !!USBD_GET_EP_STALL(ep_cur->usbd_hw_ep_hndl);
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    /* Is EP stalled
+     *
+     * NOTE: HSUSBD_GetEpStall() cannot cover CEP.
+     */
+    if (ep_cur->hsusbd_hw_ep_hndl == CEP) {
+        return !!(config->hsusbd_base->CEPCTL & HSUSBD_CEPCTL_STALLEN_Msk);
+    } else {
+       return !!HSUSBD_GetEpStall(ep_cur->hsusbd_hw_ep_hndl);
+    }
 #endif
 }
 
@@ -2096,6 +2499,44 @@ static void nu_usb_dc_ep_enable(struct nu_usb_dc_ep *ep_cur)
     USBD_CONFIG_EP(ep_cur->usbd_hw_ep_hndl, ep_cur->usbd_hw_ep_cfg);
 
     /* No separate EP interrupt control */
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    if (USB_EP_GET_IDX(ep_cur->ep_addr == 0)) {
+        /* CTRL OUT/IN as a whole are CEP. Use CTRL OUT as CEP and ignore CTRL IN */
+        if (USB_EP_DIR_IS_OUT(ep_cur->ep_addr)) {
+            /* No CEP enable/disable control */
+
+            /* Enable CEP global interrupt */
+            HSUSBD_ENABLE_USB_INT(
+                config->hsusbd_base->GINTEN |
+                HSUSBD_GINTEN_CEPIEN_Msk
+            );
+
+            /* Enable CEP local interrupt */
+            HSUSBD_ENABLE_CEP_INT(
+                HSUSBD_CEPINTEN_STSDONEIEN_Msk |
+                HSUSBD_CEPINTEN_RXPKIEN_Msk |
+                HSUSBD_CEPINTEN_TXPKIEN_Msk |
+                HSUSBD_CEPINTEN_SETUPPKIEN_Msk
+            );
+        }
+    } else {
+        /* Enable EP */
+        HSUSBD_EP_T *hsusbd_ep = config->hsusbd_base->EP + ep_cur->hsusbd_hw_ep_hndl;
+        hsusbd_ep->EPCFG |= HSUSBD_EP_CFG_VALID;
+
+        /* Enable EP global interrupt */
+        HSUSBD_ENABLE_USB_INT(
+            config->hsusbd_base->GINTEN |
+            BIT(ep_cur->hsusbd_hw_ep_hndl - EPA  + HSUSBD_GINTEN_EPAIEN_Pos)
+        );
+
+        /* Enable EP local interrupt */
+        if (USB_EP_DIR_IS_OUT(ep_cur->ep_addr)) {
+            HSUSBD_ENABLE_EP_INT(ep_cur->hsusbd_hw_ep_hndl, HSUSBD_EPINTEN_RXPKIEN_Msk);
+        } else {
+            HSUSBD_ENABLE_EP_INT(ep_cur->hsusbd_hw_ep_hndl, HSUSBD_EPINTEN_TXPKIEN_Msk);
+        }
+    }
 #endif
 }
 
@@ -2114,6 +2555,35 @@ static void nu_usb_dc_ep_disable(struct nu_usb_dc_ep *ep_cur)
     /* Disable EP */
     ep_cur->usbd_hw_ep_cfg = (ep_cur->usbd_hw_ep_cfg & ~USBD_CFG_STATE_Msk) | USBD_CFG_EPMODE_DISABLE;
     USBD_CONFIG_EP(ep_cur->usbd_hw_ep_hndl, ep_cur->usbd_hw_ep_cfg);
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    if (USB_EP_GET_IDX(ep_cur->ep_addr == 0)) {
+        /* CTRL OUT/IN as a whole are CEP. Use CTRL OUT as CEP and ignore CTRL IN */
+        if (USB_EP_DIR_IS_OUT(ep_cur->ep_addr)) {
+            /* Disable CEP local interrupt */
+            HSUSBD_ENABLE_CEP_INT(0);
+
+            /* Disable CEP global interrupt */
+            HSUSBD_ENABLE_USB_INT(
+                config->hsusbd_base->GINTEN &
+                ~HSUSBD_GINTEN_CEPIEN_Msk
+            );
+        }
+
+        /* No CEP enable/disable control */
+    } else {
+        /* Disable EP local interrupt */
+        HSUSBD_ENABLE_EP_INT(ep_cur->hsusbd_hw_ep_hndl, 0);
+
+        /* Disable EP global interrupt */
+        HSUSBD_ENABLE_USB_INT(
+            config->hsusbd_base->GINTEN &
+            ~(BIT(ep_cur->hsusbd_hw_ep_hndl - EPA  + HSUSBD_GINTEN_EPAIEN_Pos))
+        );
+
+        /* Disable EP */
+        HSUSBD_EP_T *hsusbd_ep = config->hsusbd_base->EP + ep_cur->hsusbd_hw_ep_hndl;
+        hsusbd_ep->EPCFG &= ~HSUSBD_EP_CFG_VALID;
+    }
 #endif
 }
 
@@ -2130,6 +2600,17 @@ static void nu_usb_dc_ep_out_wait(struct nu_usb_dc_ep *ep_cur)
 
 #if DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_usbd) && defined(CONFIG_USB_DC_NUMAKER_USBD)
     /* Needn't further control because NAK is replied until USBD_SET_PAYLOAD_LEN() */
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    if (USB_EP_GET_IDX(ep_cur->ep_addr == 0)) {
+        __ASSERT_NO_MSG(ep_cur->hsusbd_hw_ep_hndl == CEP);
+
+        /* Disable Data Packet Received interrupt */
+        config->hsusbd_base->CEPINTEN &= ~HSUSBD_CEPINTEN_RXPKIEN_Msk;
+    } else {
+        HSUSBD_EP_T *hsusbd_ep = config->hsusbd_base->EP + ep_cur->hsusbd_hw_ep_hndl;
+        /* Disable Data Packet Received interrupt */
+        hsusbd_ep->EPINTEN &= ~HSUSBD_EPINTEN_RXPKIEN_Msk;
+    }
 #endif
 }
 
@@ -2155,6 +2636,55 @@ static void nu_usb_dc_ep_trigger(struct nu_usb_dc_ep *ep_cur, uint32_t len)
         *((volatile uint32_t *) (config->usbd_base->RESERVE0 + 0)) &= 0xFFFFFFFD;
     }
 #endif
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    if (USB_EP_GET_IDX(ep_cur->ep_addr == 0)) {
+        __ASSERT_NO_MSG(ep_cur->hsusbd_hw_ep_hndl == CEP);
+
+        /* Changed direction means switch from Setup/Data stage to Status stage */
+        if (USB_EP_DIR_IS_OUT(ep_cur->ep_addr)) {
+            /* Enable back Data Packet Received interrupt */
+            config->hsusbd_base->CEPINTEN |= HSUSBD_CEPINTEN_RXPKIEN_Msk;
+            if (usb_reqtype_is_to_device(&ep_mgmt->setup_packet)) {
+                /* Data stage */
+            } else {
+                /* Status stage */
+                HSUSBD_SET_CEP_STATE(HSUSBD_CEPCTL_NAKCLR);
+            }
+        } else {
+            if (usb_reqtype_is_to_host(&ep_mgmt->setup_packet)) {
+                /* Data stage */
+                HSUSBD_START_CEP_IN(len);
+                /* TODO: CEPTXCNT can cover ZLP? */
+            } else {
+                /* Status stage */
+                HSUSBD_SET_CEP_STATE(HSUSBD_CEPCTL_NAKCLR);
+            }
+        }
+    } else {
+        HSUSBD_EP_T *hsusbd_ep = config->hsusbd_base->EP + ep_cur->hsusbd_hw_ep_hndl;
+        if (USB_EP_DIR_IS_OUT(ep_cur->ep_addr)) {
+            /* Enable back Data Packet Received interrupt */
+            hsusbd_ep->EPINTEN |= HSUSBD_EPINTEN_RXPKIEN_Msk;
+        } else {
+            uint32_t eprspctl_mode = hsusbd_ep->EPRSPCTL & HSUSBD_EPRSPCTL_MODE_Msk;
+            if (eprspctl_mode == HSUSBD_EP_RSPCTL_MODE_AUTO) {
+                if (len == 0) {
+                    /* Trigger ZLP, auto-clear on next IN */
+                    hsusbd_ep->EPRSPCTL = eprspctl_mode | HSUSBD_EP_RSPCTL_ZEROLEN;
+                } else if (len < ep_cur->ep_mps) {
+                    /* Trigger Short Packet, auto-clear on next IN */
+                    hsusbd_ep->EPRSPCTL = eprspctl_mode | HSUSBD_EP_RSPCTL_SHORTTXEN;
+                } else if (len == ep_cur->ep_mps) {
+                    /* Needn't extra trigger for EP IN/Auto/MPS */
+                } 
+            } else if (eprspctl_mode == HSUSBD_EP_RSPCTL_MODE_MANUAL) {
+                /* Can cover all MPS/Short Packet/ZLP */
+                hsusbd_ep->EPTXCNT = len;
+            } else if (eprspctl_mode == HSUSBD_EP_RSPCTL_MODE_FLY) {
+                /* Needn't extra trigger for EP IN/Fly */
+            }
+        }
+    }
 #endif
 }
 
@@ -2177,6 +2707,15 @@ static void nu_usb_dc_ep_abort(struct nu_usb_dc_ep *ep_cur)
         *((volatile uint32_t *) (config->usbd_base->RESERVE0 + 0)) |= 0x2;
     }
 #endif
+#elif DT_HAS_COMPAT_STATUS_OKAY(nuvoton_numaker_hsusbd) && defined(CONFIG_USB_DC_NUMAKER_HSUSBD)
+    if (USB_EP_GET_IDX(ep_cur->ep_addr == 0)) {
+        config->hsusbd_base->CEPCTL = HSUSBD_CEPCTL_FLUSH_Msk;
+    } else {
+        /* Cause packet buffer to be flushed and corresponding EP_AVAIL register to be cleared */
+        HSUSBD_EP_T *hsusbd_ep = config->hsusbd_base->EP + ep_cur->hsusbd_hw_ep_hndl;
+        uint32_t eprspctl_mode = hsusbd_ep->EPRSPCTL & HSUSBD_EPRSPCTL_MODE_Msk;
+        hsusbd_ep->EPRSPCTL = eprspctl_mode | HSUSBD_EPRSPCTL_FLUSH_Msk;
+    }
 #endif
 
     /* Relinquish EP FIFO ownership on behalf of H/W */
