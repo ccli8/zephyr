@@ -31,6 +31,10 @@
 #include "ca_certificate.h"
 #endif
 
+#if defined(CONFIG_WIFI)
+#include "wifi.h"
+#endif
+
 #define sleep(x) k_sleep(K_MSEC((x) * MSEC_PER_SEC))
 
 #endif
@@ -370,6 +374,14 @@ int main(void)
 	bool is_tls = false;
 	unsigned int num_iterations = NUM_ITER;
 	bool redirect = false;
+
+#if defined(CONFIG_WIFI)
+	printf("WiFi connecting\n");
+	if (!wifi_connect()) {
+		fatal("WiFi connect failed\n");
+	}
+	printf("WiFi connected\n");
+#endif
 
 #if defined(CONFIG_NET_SOCKETS_SOCKOPT_TLS)
 	for (int i = 0; i < ARRAY_SIZE(ca_certificates); i++) {
