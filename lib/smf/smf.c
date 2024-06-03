@@ -89,6 +89,54 @@ static bool smf_execute_all_entry_actions(struct smf_ctx *const ctx,
 					  const struct smf_state *topmost)
 {
 	struct internal_ctx *const internal = (void *)&ctx->internal;
+	
+	if (new_state == topmost) {
+		/* There are no child states, so do nothing */
+		return false;
+	}
+
+	for (const struct smf_state *to_execute = get_child_of(new_state, topmost);
+	     to_execute != NULL && to_execute != new_state;
+	     to_execute = get_child_of(new_state, to_execute)) {
+		/* Execute every entry action EXCEPT that of the topmost state */
+		if (to_execute->entry) {
+			/* Keep track of the executing entry action in case it calls
+			 * smf_set_State()
+			 */
+			ctx->executing = to_execute;
+			to_execute->entry(ctx);
+
+			/* No need to continue if terminate was set */
+			if (internal->terminate) {
+				return true;
+			}
+		}
+	}
+
+	/* and execute the new state entry action */
+	if (new_state->entry) {
+		new_state->entry(ctx);
+
+		/* No need to continue if terminate was set */
+		if (internal->terminate) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool smf_execute_all_entry_xxx(struct smf_ctx *const ctx,
+					  const struct smf_state *new_state,
+					  const struct smf_state *topmost)
+{
+	struct internal_ctx *const internal = (void *)&ctx->internal;
+	
+	//TESTTEST
+	LOG_INF("========: smf_execute_all_entry_xxx()");
+	LOG_INF("========: new_state=%p", new_state);
+	LOG_INF("========: topmost=%p", topmost);
+	LOG_INF("========: to_execute=%p", ctx->executing);
 
 	if (new_state == topmost) {
 		/* There are no child states, so do nothing */
@@ -104,6 +152,8 @@ static bool smf_execute_all_entry_actions(struct smf_ctx *const ctx,
 			 * smf_set_State()
 			 */
 			ctx->executing = to_execute;
+			//TESTTEST
+			LOG_INF("========: to_execute=%p", to_execute);
 			to_execute->entry(ctx);
 
 			/* No need to continue if terminate was set */
@@ -201,6 +251,33 @@ static bool smf_execute_all_exit_actions(struct smf_ctx *const ctx, const struct
 	     to_execute = to_execute->parent) {
 		if (to_execute->exit) {
 			to_execute->exit(ctx);
+
+			/* No need to continue if terminate was set in the exit action */
+			if (internal->terminate) {
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+//TESTTEST
+static bool smf_execute_all_exit_xxx(struct smf_ctx *const ctx, const struct smf_state *topmost)
+{
+	struct internal_ctx *const internal = (void *)&ctx->internal;
+
+	//TESTTEST
+	LOG_INF("========: smf_execute_all_exit_xxx()");
+	
+	for (const struct smf_state *to_execute = ctx->current; to_execute != topmost;
+	     to_execute = to_execute->parent) {
+		//TESTTEST
+		LOG_INF("========: topmost=%p", topmost);
+		LOG_INF("========: to_execute=%p", to_execute);
+		if (to_execute->exit) {
+			//TESTTEST
+			//to_execute->exit(ctx);
 
 			/* No need to continue if terminate was set in the exit action */
 			if (internal->terminate) {
@@ -339,6 +416,122 @@ void smf_set_state(struct smf_ctx *const ctx, const struct smf_state *new_state)
 
 	/* call all entry actions (except those of topmost) */
 	if (smf_execute_all_entry_actions(ctx, new_state, topmost)) {
+		/* No need to continue if terminate was set in the entry action */
+		return;
+	}
+#else
+	/* Flat state machines have a very simple transition: */
+	if (ctx->current->exit) {
+		internal->is_exit = true;
+		ctx->current->exit(ctx);
+		/* No need to continue if terminate was set in the exit action */
+		if (internal->terminate) {
+			return;
+		}
+		internal->is_exit = false;
+	}
+	/* update the state variables */
+	ctx->previous = ctx->current;
+	ctx->current = new_state;
+
+	if (ctx->current->entry) {
+		ctx->current->entry(ctx);
+		/* No need to continue if terminate was set in the entry action */
+		if (internal->terminate) {
+			return;
+		}
+	}
+#endif
+}
+
+//TESTTEST
+void smf_set_xxx(struct smf_ctx *const ctx, const struct smf_state *new_state)
+{
+	struct internal_ctx *const internal = (void *)&ctx->internal;
+
+	if (new_state == NULL) {
+		LOG_ERR("new_state cannot be NULL");
+		return;
+	}
+
+	/*
+	 * It does not make sense to call smf_set_state in an exit phase of a state
+	 * since we are already in a transition; we would always ignore the
+	 * intended state to transition into.
+	 */
+	if (internal->is_exit) {
+		LOG_ERR("Calling %s from exit action", __func__);
+		return;
+	}
+
+#ifdef CONFIG_SMF_ANCESTOR_SUPPORT
+	const struct smf_state *topmost;
+
+	if (share_paren(ctx->executing, new_state)) {
+		/* new state is a parent of where we are now*/
+		topmost = new_state;
+	} else if (share_paren(new_state, ctx->executing)) {
+		/* we are a parent of the new state */
+		topmost = ctx->executing;
+	} else {
+		/* not directly related, find LCA */
+		topmost = get_lca_of(ctx->executing, new_state);
+	}
+
+	//TESTTEST
+	LOG_INF("========: smf_set_xxx()");
+	LOG_INF("========: executing=%p", ctx->executing);
+	LOG_INF("========: new_state=%p", new_state);
+	LOG_INF("========: topmost=%p", topmost);
+
+	internal->is_exit = true;
+	internal->new_state = true;
+
+	/* call all exit actions up to (but not including) the topmost */
+	if (smf_execute_all_exit_xxx(ctx, topmost)) {
+		/* No need to continue if terminate was set in the exit action */
+		return;
+	}
+
+	/* if self-transition, call the exit action */
+	if ((ctx->executing == new_state) && (new_state->exit)) {
+		new_state->exit(ctx);
+
+		/* No need to continue if terminate was set in the exit action */
+		if (internal->terminate) {
+			return;
+		}
+	}
+
+	internal->is_exit = false;
+
+	/* if self transition, call the entry action */
+	if ((ctx->executing == new_state) && (new_state->entry)) {
+		new_state->entry(ctx);
+
+		/* No need to continue if terminate was set in the entry action */
+		if (internal->terminate) {
+			return;
+		}
+	}
+#ifdef CONFIG_SMF_INITIAL_TRANSITION
+	/*
+	 * The final target will be the deepest leaf state that
+	 * the target contains. Set that as the real target.
+	 */
+	while (new_state->initial) {
+		new_state = new_state->initial;
+	}
+#endif
+
+	/* update the state variables */
+	ctx->previous = ctx->current;
+	ctx->current = new_state;
+	//TESTTEST
+	//ctx->executing = new_state;
+
+	/* call all entry actions (except those of topmost) */
+	if (smf_execute_all_entry_xxx(ctx, new_state, topmost)) {
 		/* No need to continue if terminate was set in the entry action */
 		return;
 	}

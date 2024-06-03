@@ -314,7 +314,8 @@ void prl_run(const struct device *dev)
 		}
 
 		/* Run Protocol Layer Hard Reset state machine */
-		smf_run_state(SMF_CTX(prl_hr));
+		//TESTTEST
+		//smf_run_state(SMF_CTX(prl_hr));
 
 		/*
 		 * During Hard Reset no USB Power Delivery Protocol Messages
@@ -328,7 +329,8 @@ void prl_run(const struct device *dev)
 			prl_rx_wait_for_phy_message(dev);
 
 			/* Run Protocol Layer Message Tx state machine */
-			smf_run_state(SMF_CTX(prl_tx));
+			//TESTTEST
+			//smf_run_state(SMF_CTX(prl_tx));
 		}
 		break;
 	}
@@ -412,7 +414,12 @@ static void prl_hr_set_state(const struct device *dev, const enum usbc_prl_hr_st
 	struct protocol_hard_reset_t *prl_hr = data->prl_hr;
 
 	__ASSERT(state < ARRAY_SIZE(prl_hr_states), "invalid prl_hr_state %d", state);
+	//TESTTEST
+	#if 0
 	smf_set_state(SMF_CTX(prl_hr), &prl_hr_states[state]);
+	#else
+	smf_set_xxx(SMF_CTX(prl_hr), &prl_hr_states[state]);
+	#endif
 }
 
 /**
@@ -547,7 +554,10 @@ static void prl_init(const struct device *dev)
 	/* Initialize the PRL_HR state machine */
 	prl_hr->flags = ATOMIC_INIT(0);
 	usbc_timer_init(&prl_hr->pd_t_hard_reset_complete, PD_T_HARD_RESET_COMPLETE_MAX_MS);
-	prl_hr_set_state(dev, PRL_HR_WAIT_FOR_REQUEST);
+	//TESTTEST
+	//prl_hr_set_state(dev, PRL_HR_WAIT_FOR_REQUEST);
+	//prl_hr_set_state(dev, PRL_HR_SUSPEND);
+	prl_hr_set_state(dev, PRL_HR_RESET_LAYER);
 
 	/* Initialize the PRL_TX state machine */
 	prl_tx->flags = ATOMIC_INIT(0);
@@ -557,7 +567,8 @@ static void prl_init(const struct device *dev)
 	}
 	usbc_timer_init(&prl_tx->pd_t_tx_timeout, PD_T_TX_TIMEOUT_MS);
 	usbc_timer_init(&prl_tx->pd_t_sink_tx, PD_T_SINK_TX_MAX_MS);
-	prl_tx_set_state(dev, PRL_TX_PHY_LAYER_RESET);
+	//TESTTEST
+	//prl_tx_set_state(dev, PRL_TX_PHY_LAYER_RESET);
 
 	/* Initialize the PRL_RX state machine */
 	prl_rx->flags = ATOMIC_INIT(0);
@@ -1332,12 +1343,22 @@ static const struct smf_state prl_hr_states[PRL_HR_STATE_COUNT] = {
 		NULL,
 		NULL,
 		NULL),
+	//TESTTEST
+	#if 0
 	[PRL_HR_RESET_LAYER] = SMF_CREATE_STATE(
 		prl_hr_reset_layer_entry,
 		NULL,
 		NULL,
 		NULL,
 		NULL),
+	#else
+	[PRL_HR_RESET_LAYER] = SMF_CREATE_STATE(
+		prl_hr_suspend_entry,
+		prl_hr_suspend_run,
+		NULL,
+		NULL,
+		NULL),
+	#endif
 	[PRL_HR_WAIT_FOR_PHY_HARD_RESET_COMPLETE] = SMF_CREATE_STATE(
 		prl_hr_wait_for_phy_hard_reset_complete_entry,
 		prl_hr_wait_for_phy_hard_reset_complete_run,

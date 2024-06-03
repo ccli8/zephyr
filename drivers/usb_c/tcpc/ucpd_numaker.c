@@ -647,6 +647,9 @@ cleanup:
 /* Notify TCPC alert */
 static void numaker_utcpd_notify_tcpc_alert(const struct device *dev, enum tcpc_alert alert)
 {
+	//TESTTEST
+	return;
+
 	struct numaker_tcpc_data *data = dev->data;
 	tcpc_alert_handler_cb_t alert_handler = data->tcpc_alert.handler;
 	void *alert_data = data->tcpc_alert.data;
@@ -659,6 +662,9 @@ static void numaker_utcpd_notify_tcpc_alert(const struct device *dev, enum tcpc_
 /* Notify PPC event */
 static void numaker_utcpd_notify_ppc_event(const struct device *dev, enum usbc_ppc_event event)
 {
+	//TESTTEST
+	return;
+
 	struct numaker_tcpc_data *data = dev->data;
 	usbc_ppc_event_cb_t event_handler = data->ppc_event.handler;
 	void *event_data = data->ppc_event.data;

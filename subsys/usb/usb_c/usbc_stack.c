@@ -29,7 +29,8 @@ static ALWAYS_INLINE void usbc_handler(void *port_dev)
 
 	req = k_fifo_get(&port->request_fifo, K_NO_WAIT);
 	request = (req != NULL) ? req->val : REQUEST_NOP;
-	pe_run(dev, request);
+	//TESTTEST
+	//pe_run(dev, request);
 	prl_run(dev);
 	tc_run(dev, request);
 
