@@ -1,0 +1,18 @@
+# Copyright (c) 2023 Nuvoton Technology Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+description: Nuvoton NuMaker Peripheral Clock Controller (PCC)
+
+compatible: "nuvoton,numaker-pcc-modidx64"
+
+include: [clock-controller.yaml, base.yaml]
+
+properties:
+  "#clock-cells":
+    const: 4
+
+clock-cells:
+  - clock-module-index-hi32 # Same as u64ModuleIdx on invoking BSP CLK driver CLK_SetModuleClock()
+  - clock-module-index-lo32
+  - clock-source            # Same as u32ClkSrc on invoking BSP CLK driver CLK_SetModuleClock()
+  - clock-divider           # Same as u32ClkDiv on invoking BSP CLK driver CLK_SetModuleClock()

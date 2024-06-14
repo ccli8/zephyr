@@ -50,8 +50,8 @@
 			core-clock = <DT_FREQ_M(72)>;
 
 			pcc: peripheral-clock-controller {
-				compatible = "nuvoton,numaker-pcc";
-				#clock-cells = <3>;
+				compatible = "nuvoton,numaker-pcc-modidx64";
+				#clock-cells = <4>;
 			};
 		};
 
