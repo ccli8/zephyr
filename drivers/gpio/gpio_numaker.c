@@ -24,7 +24,11 @@ struct gpio_numaker_config {
 	uint32_t reg;
 	uint32_t gpa_base;
 	uint32_t size;
+#if defined(CONFIG_SOC_SERIES_M2L31X)
+	uint64_t clk_modidx;
+#else
 	uint32_t clk_modidx;
+#endif
 	const struct device *clk_dev;
 };
 
@@ -226,6 +230,15 @@ static void gpio_numaker_isr(const struct device *dev)
 
 #define CLOCK_CTRL_INIT(n) .clk_dev = DEVICE_DT_GET(DT_PARENT(DT_INST_CLOCKS_CTLR(n))),
 
+#if defined(CONFIG_SOC_SERIES_M2L31X)
+#define CLOCK_MODULE_INDEX_INIT(n)                                           \
+	(((uint64_t) DT_INST_CLOCKS_CELL(n, clock_module_index_hi32)) << 32) \
+	|DT_INST_CLOCKS_CELL(n, clock_module_index_lo32)
+#else
+#define CLOCK_MODULE_INDEX_INIT(n)                                           \
+	DT_INST_CLOCKS_CELL(n, clock_module_index)
+#endif
+
 #define GPIO_NUMAKER_IRQ_INIT(n)                                                                   \
 	do {                                                                                       \
 		IRQ_CONNECT(DT_INST_IRQN(n), DT_INST_IRQ(n, priority), gpio_numaker_isr,           \
@@ -242,7 +255,7 @@ static void gpio_numaker_isr(const struct device *dev)
 		.reg = DT_INST_REG_ADDR(n),                                                        \
 		.gpa_base = DT_REG_ADDR(DT_NODELABEL(gpioa)),                                      \
 		.size = DT_REG_SIZE(DT_NODELABEL(gpioa)),                                          \
-		.clk_modidx = DT_INST_CLOCKS_CELL(n, clock_module_index),                          \
+		.clk_modidx = CLOCK_MODULE_INDEX_INIT(n),                                          \
 		CLOCK_CTRL_INIT(n)};                                                               \
                                                                                                    \
 	static struct gpio_numaker_data gpio_numaker_data##n;                                      \

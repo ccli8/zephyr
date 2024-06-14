@@ -21,7 +21,11 @@ LOG_MODULE_REGISTER(numaker_uart, LOG_LEVEL_ERR);
 struct uart_numaker_config {
 	UART_T *uart;
 	const struct reset_dt_spec reset;
+#if defined(CONFIG_SOC_SERIES_M2L31X)
+	uint64_t clk_modidx;
+#else
 	uint32_t clk_modidx;
+#endif
 	uint32_t clk_src;
 	uint32_t clk_div;
 	const struct device *clk_dev;
@@ -405,6 +409,15 @@ static const struct uart_driver_api uart_numaker_driver_api = {
 
 #define CLOCK_CTRL_INIT(n) .clk_dev = DEVICE_DT_GET(DT_PARENT(DT_INST_CLOCKS_CTLR(n))),
 
+#if defined(CONFIG_SOC_SERIES_M2L31X)
+#define CLOCK_MODULE_INDEX_INIT(n)                                           \
+	(((uint64_t) DT_INST_CLOCKS_CELL(n, clock_module_index_hi32)) << 32) \
+	|DT_INST_CLOCKS_CELL(n, clock_module_index_lo32)
+#else
+#define CLOCK_MODULE_INDEX_INIT(n)                                           \
+	DT_INST_CLOCKS_CELL(n, clock_module_index)
+#endif
+
 #define PINCTRL_DEFINE(n) PINCTRL_DT_INST_DEFINE(n);
 #define PINCTRL_INIT(n)	  .pincfg = PINCTRL_DT_INST_DEV_CONFIG_GET(n),
 
@@ -429,7 +442,7 @@ static const struct uart_driver_api uart_numaker_driver_api = {
 	static const struct uart_numaker_config uart_numaker_cfg_##inst = {                        \
 		.uart = (UART_T *)DT_INST_REG_ADDR(inst),                                          \
 		.reset = RESET_DT_SPEC_INST_GET(inst),                                             \
-		.clk_modidx = DT_INST_CLOCKS_CELL(inst, clock_module_index),                       \
+		.clk_modidx = CLOCK_MODULE_INDEX_INIT(inst),                                       \
 		.clk_src = DT_INST_CLOCKS_CELL(inst, clock_source),                                \
 		.clk_div = DT_INST_CLOCKS_CELL(inst, clock_divider),                               \
 		CLOCK_CTRL_INIT(inst).irq_n = DT_INST_IRQN(inst),                                  \

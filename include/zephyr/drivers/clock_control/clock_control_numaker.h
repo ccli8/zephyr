@@ -25,13 +25,17 @@ struct numaker_scc_subsys {
 	uint32_t subsys_id; /* SCC sybsystem ID */
 
 	/* Peripheral clock control configuration structure
-	 * clk_modidx is same as u32ModuleIdx in BSP CLK_SetModuleClock().
+	 * clk_modidx is same as u32ModuleIdx/u64ModuleIdx in BSP CLK_SetModuleClock().
 	 * clk_src is same as u32ClkSrc in BSP CLK_SetModuleClock().
 	 * clk_div is same as u32ClkDiv in BSP CLK_SetModuleClock().
 	 */
 	union {
 		struct {
+#if defined(CONFIG_SOC_SERIES_M2L31X)
+			uint64_t clk_modidx;
+#else
 			uint32_t clk_modidx;
+#endif
 			uint32_t clk_src;
 			uint32_t clk_div;
 		} pcc;
