@@ -9,9 +9,10 @@ include: [clock-controller.yaml, base.yaml]
 
 properties:
   "#clock-cells":
-    const: 3
+    const: 4
 
 clock-cells:
-  - clock-module-index  # Same as u32ModuleIdx on invoking BSP CLK driver CLK_SetModuleClock()
-  - clock-source        # Same as u32ClkSrc on invoking BSP CLK driver CLK_SetModuleClock()
-  - clock-divider       # Same as u32ClkDiv on invoking BSP CLK driver CLK_SetModuleClock()
+  - clock-module-index-hi32 # Same as u32ModuleIdx/u64ModuleIdx on invoking BSP CLK driver
+  - clock-module-index      # CLK_SetModuleClock()
+  - clock-source            # Same as u32ClkSrc on invoking BSP CLK driver CLK_SetModuleClock()
+  - clock-divider           # Same as u32ClkDiv on invoking BSP CLK driver CLK_SetModuleClock()

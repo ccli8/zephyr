@@ -30,7 +30,11 @@ static inline int numaker_scc_on(const struct device *dev, clock_control_subsys_
 
 	if (scc_subsys->subsys_id == NUMAKER_SCC_SUBSYS_ID_PCC) {
 		SYS_UnlockReg();
+#if defined(CONFIG_SOC_SERIES_M2L31X)
 		CLK_EnableModuleClock(scc_subsys->pcc.clk_modidx);
+#else
+		CLK_EnableModuleClock((uint32_t)scc_subsys->pcc.clk_modidx);
+#endif
 		SYS_LockReg();
 	} else {
 		return -EINVAL;
@@ -47,7 +51,11 @@ static inline int numaker_scc_off(const struct device *dev, clock_control_subsys
 
 	if (scc_subsys->subsys_id == NUMAKER_SCC_SUBSYS_ID_PCC) {
 		SYS_UnlockReg();
+#if defined(CONFIG_SOC_SERIES_M2L31X)
 		CLK_DisableModuleClock(scc_subsys->pcc.clk_modidx);
+#else
+		CLK_DisableModuleClock((uint32_t)scc_subsys->pcc.clk_modidx);
+#endif
 		SYS_LockReg();
 	} else {
 		return -EINVAL;
@@ -84,8 +92,13 @@ static inline int numaker_scc_configure(const struct device *dev, clock_control_
 
 	if (scc_subsys->subsys_id == NUMAKER_SCC_SUBSYS_ID_PCC) {
 		SYS_UnlockReg();
+#if defined(CONFIG_SOC_SERIES_M2L31X)
 		CLK_SetModuleClock(scc_subsys->pcc.clk_modidx, scc_subsys->pcc.clk_src,
 				   scc_subsys->pcc.clk_div);
+#else
+		CLK_SetModuleClock((uint32_t) scc_subsys->pcc.clk_modidx, scc_subsys->pcc.clk_src,
+				   scc_subsys->pcc.clk_div);
+#endif
 		SYS_LockReg();
 	} else {
 		return -EINVAL;

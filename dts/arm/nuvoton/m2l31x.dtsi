@@ -51,7 +51,7 @@
 
 			pcc: peripheral-clock-controller {
 				compatible = "nuvoton,numaker-pcc";
-				#clock-cells = <3>;
+				#clock-cells = <4>;
 			};
 		};
 
