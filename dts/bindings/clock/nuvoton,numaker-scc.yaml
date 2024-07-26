@@ -47,3 +47,27 @@ properties:
     type: int
     description: |
       Configure core clock (HCLK)
+
+  pll-clock-source:
+    type: int
+    description: |
+      Configure PLL clock source. Same as u32PllFreq parameter on invoking
+      BSP CLK driver CLK_EnablePLL().
+
+  pll-target-frequency:
+    type: int
+    description: |
+      Configure PLL target frequency. Same as u32PllFreq parameter on invoking
+      BSP CLK driver CLK_EnablePLL().
+
+  hclk-clock-source:
+    type: int
+    description: |
+      Configure HCLK clock source. Same as u32ClkSrc parameter on invoking
+      BSP CLK driver CLK_SetHCLK().
+
+  hclk-clock-divider:
+    type: int
+    description: |
+      Configure HCLK clock divider. Same as u32ClkDiv parameter on invoking
+      BSP CLK driver CLK_SetHCLK().

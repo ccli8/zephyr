@@ -70,6 +70,18 @@ void z_arm_platform_init(void)
 	CLK->PCLKDIV = DT_PROP(DT_NODELABEL(scc), clk_pclkdiv);
 #endif
 
+#if DT_NODE_HAS_PROP(DT_NODELABEL(scc), pll_clock_source)
+	/* Set up PLL on request */
+	CLK_EnablePLL(DT_PROP(DT_NODELABEL(scc), pll_clock_source),
+		      DT_PROP(DT_NODELABEL(scc), pll_target_frequency));
+#endif
+
+#if DT_NODE_HAS_PROP(DT_NODELABEL(scc), hclk_clock_source)
+	/* Set up HCLK on request */
+	CLK_SetHCLK(DT_PROP(DT_NODELABEL(scc), hclk_clock_source),
+		    DT_PROP(DT_NODELABEL(scc), hclk_clock_divider));
+#endif
+
 #if DT_NODE_HAS_PROP(DT_NODELABEL(scc), core_clock)
 	/* Set core clock (HCLK) on request */
 	CLK_SetCoreClock(DT_PROP(DT_NODELABEL(scc), core_clock));
