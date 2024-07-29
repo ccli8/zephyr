@@ -83,7 +83,7 @@ void z_arm_platform_init(void)
 #endif
 
 #if DT_NODE_HAS_PROP(DT_NODELABEL(scc), core_clock)
-	/* Set core clock (HCLK) on request */
+	/* Set up core clock on request */
 	CLK_SetCoreClock(DT_PROP(DT_NODELABEL(scc), core_clock));
 #endif
 

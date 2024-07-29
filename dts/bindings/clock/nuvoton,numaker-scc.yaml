@@ -46,7 +46,8 @@ properties:
   core-clock:
     type: int
     description: |
-      Configure core clock (HCLK)
+      Configure core clock. Same as parameter on invoking
+      BSP CLK driver CLK_SetCoreClock().
 
   pll-clock-source:
     type: int
