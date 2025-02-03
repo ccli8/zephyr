@@ -68,7 +68,11 @@ static APP_BMEM bool aliases_enabled;
 
 #include "test_certs.h"
 
+#if defined(CONFIG_NET_SAMPLE_APP_MQTT_BROKER_ECLIPSEPROJECTS)
+#define TLS_SNI_HOSTNAME "mqtt.eclipseprojects.io"
+#else
 #define TLS_SNI_HOSTNAME "localhost"
+#endif
 #define APP_CA_CERT_TAG 1
 #define APP_PSK_TAG 2
 
@@ -565,6 +569,10 @@ static K_HEAP_DEFINE(app_mem_pool, 1024 * 2);
 
 int main(void)
 {
+#if defined(CONFIG_NET_DHCPV4)
+	net_dhcpv4_start(net_if_get_default());
+#endif
+
 	wait_for_network();
 
 #if defined(CONFIG_MQTT_LIB_TLS)

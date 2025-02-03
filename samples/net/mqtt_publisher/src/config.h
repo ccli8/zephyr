@@ -64,4 +64,41 @@
 #define BLUEMIX_FORMAT		"json"
 #endif
 
+#if defined(CONFIG_NET_SAMPLE_APP_MQTT_BROKER_ECLIPSEPROJECTS)
+
+/* Use MQTT broker mqtt.eclipseprojects.io */
+
+/* No use */
+#undef ZEPHYR_ADDR
+
+/* Redefine MQTT broker IP */
+#undef SERVER_ADDR
+#define SERVER_ADDR		"137.135.83.217"
+
+/* Redefine MQTT broker port */
+#undef SERVER_PORT
+#ifdef CONFIG_MQTT_LIB_TLS
+#ifdef CONFIG_MQTT_LIB_WEBSOCKET
+#define SERVER_PORT		443
+#else
+#define SERVER_PORT		8883
+#endif /* CONFIG_MQTT_LIB_WEBSOCKET */
+#else
+#ifdef CONFIG_MQTT_LIB_WEBSOCKET
+#define SERVER_PORT		80
+#else
+#define SERVER_PORT		1883
+#endif /* CONFIG_MQTT_LIB_WEBSOCKET */
+#endif
+
+#endif
+
+#if defined(CONFIG_SOC_FAMILY_NUMAKER)
+
+/* Slow down publish rate, or net_pkt alloc failure */
+#undef APP_SLEEP_MSECS
+#define APP_SLEEP_MSECS		1000
+
+#endif
+
 #endif

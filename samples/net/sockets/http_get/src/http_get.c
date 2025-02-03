@@ -61,6 +61,10 @@ int main(void)
 	struct addrinfo *res;
 	int st, sock;
 
+#if defined(CONFIG_NET_DHCPV4)
+	net_dhcpv4_start(net_if_get_default());
+#endif
+
 	wait_for_network();
 
 #if defined(CONFIG_NET_SOCKETS_SOCKOPT_TLS)

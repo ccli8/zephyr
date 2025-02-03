@@ -33,6 +33,14 @@
 #include "ca_certificate.h"
 #endif
 
+#include <zephyr/net/net_if.h>
+
+#if defined(CONFIG_NET_DHCPV4)
+#include <zephyr/net/dhcpv4.h>
+#endif
+
+#include "net_sample_common.h"
+
 #define sleep(x) k_sleep(K_MSEC((x) * MSEC_PER_SEC))
 
 #endif
@@ -254,7 +262,7 @@ bool download(struct addrinfo *ai, bool is_tls, bool *redirect)
 {
 	int sock;
 	struct timeval timeout = {
-		.tv_sec = 5
+		.tv_sec = 30
 	};
 
 	cur_bytes = 0U;
@@ -372,6 +380,12 @@ int main(void)
 	bool is_tls = false;
 	unsigned int num_iterations = NUM_ITER;
 	bool redirect = false;
+
+#if defined(CONFIG_NET_DHCPV4)
+	net_dhcpv4_start(net_if_get_default());
+#endif
+
+	wait_for_network();
 
 #if defined(CONFIG_NET_SOCKETS_SOCKOPT_TLS)
 	for (int i = 0; i < ARRAY_SIZE(ca_certificates); i++) {
