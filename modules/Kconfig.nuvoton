@@ -26,6 +26,10 @@ config HAS_NUMAKER_HAL
 
 menu "Nuvoton NuMaker drivers"
 	depends on HAS_NUMAKER_HAL
+	config HAS_NUMAKER_STDDRIVER
+		bool "NuMaker StdDriver"
+		help
+		  Enable Nuvoton most StdDriver HAL module drivers
 	config HAS_NUMAKER_UART
 		bool "NuMaker UART"
 		help
