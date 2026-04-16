@@ -37,6 +37,31 @@ static bool flash_numaker_is_range_valid(off_t offset, size_t len)
 {
 	uint32_t aprom_size = (FMC_APROM_END - FMC_APROM_BASE);
 
+	/* For TrustZone, adjust offset and aprom_size
+	 *
+	 * offset: relative to partition base
+	 * aprom_size: partition size
+	 */
+#if defined(CONFIG_ARM_SECURE_FIRMWARE)
+	if (offset >= FMC_SECURE_END && offset < FMC_NON_SECURE_BASE) {
+		return false;
+	}
+
+	if (offset >= FMC_NON_SECURE_BASE) {
+		offset -= FMC_NON_SECURE_BASE;
+		aprom_size -= FMC_SECURE_REGION_SIZE;
+	} else {
+		aprom_size = FMC_SECURE_REGION_SIZE;
+	}
+#elif defined(CONFIG_ARM_NONSECURE_FIRMWARE)
+	if (offset < FMC_NON_SECURE_BASE) {
+		return false;
+	}
+
+	offset -= FMC_NON_SECURE_BASE;
+	aprom_size -= FMC_SECURE_REGION_SIZE;
+#endif
+
 	/* check for min value */
 	if ((offset < 0) || (len == 0)) {
 		return false;
@@ -230,8 +255,8 @@ done:
 
 #if defined(CONFIG_FLASH_PAGE_LAYOUT)
 static const struct flash_pages_layout dev_layout = {
-	.pages_count =
-		DT_REG_SIZE(SOC_NV_FLASH_NODE) / DT_PROP(SOC_NV_FLASH_NODE, erase_block_size),
+	.pages_count = DT_REG_SIZE(SOC_NV_FLASH_NODE) /
+		       DT_PROP(SOC_NV_FLASH_NODE, erase_block_size),
 	.pages_size = DT_PROP(SOC_NV_FLASH_NODE, erase_block_size),
 };
 

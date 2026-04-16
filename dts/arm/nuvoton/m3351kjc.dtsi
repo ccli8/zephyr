@@ -8,12 +8,31 @@
 #include <nuvoton/m335x.dtsi>
 
 / {
+#if defined(NVT_DT_TZ_SPE)
+	sram0: memory@20000000 {
+		compatible = "mmio-sram";
+		reg = <0x20000000 DT_SIZE_K(64)>;
+	};
+#elif defined(NVT_DT_TZ_NSPE)
+	sram0: memory@30010000 {
+		compatible = "mmio-sram";
+		reg = <0x30010000 DT_SIZE_K(64)>;
+	};
+#else
 	sram0: memory@20000000 {
 		compatible = "mmio-sram";
 		reg = <0x20000000 DT_SIZE_K(128)>;
 	};
+#endif
 
 	soc {
+#if defined(NVT_DT_TZ_NSPE)
+		peripherals@50000000 {
+			#address-cells = <1>;
+			#size-cells = <1>;
+			ranges = <0x40000000 0x50000000 0x10000000>;
+#endif
+
 		fmc: flash-controller@4000c000 {
 			#address-cells = <1>;
 			#size-cells = <1>;
@@ -26,5 +45,9 @@
 				ranges;
 			};
 		};
+
+#if defined(NVT_DT_TZ_NSPE)
+		}; /* End of peripherals */
+#endif
 	};
 };

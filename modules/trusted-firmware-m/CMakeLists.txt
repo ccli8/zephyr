@@ -735,4 +735,6 @@ if(CONFIG_BUILD_WITH_TFM)
       )
   endif()
 
+else()
+  add_subdirectory_ifdef(CONFIG_SOC_FAMILY_NUMAKER nuvoton)
 endif() # CONFIG_BUILD_WITH_TFM
