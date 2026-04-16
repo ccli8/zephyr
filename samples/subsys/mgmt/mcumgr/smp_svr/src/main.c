@@ -102,3 +102,22 @@ int main(void)
 	}
 	return 0;
 }
+
+#if defined(CONFIG_SOC_SERIES_M335X)
+
+void SYS_UnlockReg();
+void SYS_ResetChip();
+
+/*
+ * To unlock DFWPROT (FMC_DFWPKEEP) after reboot, override with chip reset
+ * instead of NVIC_SystemReset
+ */
+void sys_arch_reboot(int type)
+{
+	ARG_UNUSED(type);
+
+	SYS_UnlockReg();
+	SYS_ResetChip();
+}
+
+#endif
