@@ -9,4 +9,14 @@ if BOARD_NUMAKER_PFM_M467
 configdefault NET_L2_ETHERNET
 	default y if !MODEM
 
+# For BOOTLOADER_MCUBOOT, the symbol is invisible, so it can only be changed
+# via Kconfig default.
+#
+# Cortex-M vector tables must be aligned to a power-of-two boundary based on
+# the total number of entries, with a minimum alignment of 128 bytes.
+#
+# Also align to sector size boundary for safe.
+configdefault ROM_START_OFFSET
+	default 0x1000 if BOOTLOADER_MCUBOOT
+
 endif # BOARD_NUMAKER_PFM_M467

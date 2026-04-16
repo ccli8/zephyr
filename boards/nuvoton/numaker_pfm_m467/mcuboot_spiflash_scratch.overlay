@@ -1,0 +1,118 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 Nuvoton Technology Corporation
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	soc {
+		qspi0: spi@40060000 {
+			compatible = "nuvoton,numaker-spi";
+			reg = <0x40060000 0x1000>;
+			interrupts = <22 0>;
+			resets = <&rst NUMAKER_QSPI0_RST>;
+			clocks = <&pcc NUMAKER_QSPI0_MODULE NUMAKER_CLK_CLKSEL2_QSPI0SEL_PCLK0 0>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+	};
+};
+
+&pinctrl {
+	/* NuMaker-IoT-M467 on-board SPI NOR Flash: SS/CLK/MISO/MOSI */
+	qspi0_default: qspi0_default {
+		group0 {
+			pinmux = <PI15MFP_QSPI0_CLK>;
+			input-schmitt-enable;
+			slew-rate = "high";
+		};
+
+		/* For auto-ss, add PI14MFP_QSPI0_SS */
+		group1 {
+			pinmux = <PJ0MFP_QSPI0_MISO0>,
+				 <PJ1MFP_QSPI0_MOSI0>;
+			slew-rate = "high";
+		};
+	};
+};
+
+&qspi0 {
+	status = "okay";
+	pinctrl-0 = <&qspi0_default>;
+	pinctrl-names = "default";
+
+	/* For auto-ss, comment it out */
+	cs-gpios = <&gpioi 14 GPIO_ACTIVE_LOW>;
+
+	w25q32jv_spi: spi-nor-flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <133000000>;
+		size = <DT_SIZE_M(32)>; /* 32 Mbits */
+		status = "okay";
+		jedec-id = [ef 40 16];
+		wp-gpios = <&gpioi 13 GPIO_ACTIVE_LOW>;
+		hold-gpios = <&gpioi 12 GPIO_ACTIVE_LOW>;
+	};
+};
+
+&gpioi {
+	status = "okay";
+};
+
+&gpioj {
+	status = "okay";
+};
+
+
+/delete-node/ &slot0_partition;
+/delete-node/ &slot1_partition;
+/delete-node/ &storage_partition;
+
+&flash0 {
+	partitions {
+		boot_partition: partition@0 {
+			compatible = "zephyr,mapped-partition";
+			label = "mcuboot";
+			reg = <0x00000000 0x00010000>;
+			read-only;
+		};
+
+		slot0_partition: partition@10000 {
+			compatible = "zephyr,mapped-partition";
+			label = "image-0";
+			reg = <0x00010000 0x000f0000>;
+		};
+	};
+};
+
+&w25q32jv_spi {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		slot1_partition: partition@0 {
+			label = "image-1";
+			reg = <0x00000000 0x000f0000>;
+		};
+
+		storage_partition: partition@f0000 {
+			label = "storage";
+			reg = <0x000f0000 0x00010000>;
+		};
+
+		/*
+		 * For SPI NOR Flash, CONFIG_SPI_NOR_FLASH_LAYOUT_PAGE_SIZE
+		 * defaults to 64KB.
+		 *
+		 * NOTE: In Zephyr Flash API term, page means erase unit. However, for
+		 * SPI NOR Flash, page is fixed to 256 bytes and isn't erase unit.
+		 */
+		scratch_partition: partition@100000 {
+			label = "image-scratch";
+			reg = <0x00100000 0x00020000>;
+		};
+	};
+};
+		
