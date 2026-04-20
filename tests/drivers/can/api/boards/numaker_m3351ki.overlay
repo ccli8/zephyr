@@ -1,0 +1,26 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 Nuvoton Technology Corporation
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	chosen {
+		zephyr,canbus = &canfd0;
+	};
+};
+
+&pinctrl {
+	/* CAN TX/RX --> UNO D8/D9 */
+	canfd0_default: canfd0_default {
+		group0 {
+			pinmux = <PA5MFP_CANFD0_TXD>,
+				 <PA4MFP_CANFD0_RXD>;
+		};
+	};
+};
+
+&canfd0 {
+	pinctrl-0 = <&canfd0_default>;
+	pinctrl-names = "default";
+	status = "okay";
+};
