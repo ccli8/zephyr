@@ -1,0 +1,65 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 Nuvoton Technology Corporation
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/ {
+	soc {
+		qspi0: spi@40060000 {
+			compatible = "nuvoton,numaker-spi";
+			reg = <0x40060000 0x1000>;
+			interrupts = <22 0>;
+			resets = <&rst NUMAKER_QSPI0_RST>;
+			clocks = <&pcc NUMAKER_QSPI0_MODULE NUMAKER_CLK_CLKSEL2_QSPI0SEL_PCLK0 0>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			status = "disabled";
+		};
+	};
+};
+
+&pinctrl {
+	/* NuMaker-IoT-M467 on-board SPI NOR Flash: SS/CLK/MISO/MOSI */
+	qspi0_default: qspi0_default {
+		group0 {
+			pinmux = <PI15MFP_QSPI0_CLK>;
+			input-schmitt-enable;
+			slew-rate = "high";
+		};
+
+		/* For auto-ss, add PI14MFP_QSPI0_SS */
+		group1 {
+			pinmux = <PJ0MFP_QSPI0_MISO0>,
+				 <PJ1MFP_QSPI0_MOSI0>;
+			slew-rate = "high";
+		};
+	};
+};
+
+&qspi0 {
+	status = "okay";
+	pinctrl-0 = <&qspi0_default>;
+	pinctrl-names = "default";
+
+	/* For auto-ss, comment it out */
+	cs-gpios = <&gpioi 14 GPIO_ACTIVE_LOW>;
+
+	w25q32jv_spi: spi-nor-flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <133000000>;
+		size = <DT_SIZE_M(32)>; /* 32 Mbits */
+		status = "okay";
+		jedec-id = [ef 40 16];
+		wp-gpios = <&gpioi 13 GPIO_ACTIVE_LOW>;
+		hold-gpios = <&gpioi 12 GPIO_ACTIVE_LOW>;
+	};
+};
+
+&gpioi {
+	status = "okay";
+};
+
+&gpioj {
+	status = "okay";
+};
