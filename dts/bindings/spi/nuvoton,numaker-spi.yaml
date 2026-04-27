@@ -19,3 +19,8 @@ properties:
 
   clocks:
     required: true
+
+  qspi:
+    type: boolean
+    description: |
+      Identifies as QSPI peripheral which can run in Standard (1-bit) mode
