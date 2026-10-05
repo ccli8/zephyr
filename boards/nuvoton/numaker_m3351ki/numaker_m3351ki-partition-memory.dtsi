@@ -85,13 +85,13 @@
 		#address-cells = <1>;
 		#size-cells = <1>;
 
-		slot0_partition: partition@80000 {
+		slot0_partition: slot0_ns_partition: partition@80000 {
 			compatible = "zephyr,mapped-partition";
 			label = "image-0";
 			reg = <0x80000 0x40000>;
 		};
 
-		slot1_partition: partition@c0000 {
+		slot1_partition: slot1_ns_partition: partition@c0000 {
 			compatible = "zephyr,mapped-partition";
 			label = "image-1";
 			reg = <0xc0000 0x40000>;
