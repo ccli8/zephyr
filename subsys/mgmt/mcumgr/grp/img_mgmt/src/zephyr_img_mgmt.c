@@ -24,7 +24,13 @@
 #include <zephyr/retention/blinfo.h>
 #endif
 
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+#include <psa/update.h>
+#endif
+
 LOG_MODULE_DECLARE(mcumgr_img_grp, CONFIG_MCUMGR_GRP_IMG_LOG_LEVEL);
+
+#if !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
 
 #define SLOT0_PARTITION		slot0_partition
 #define SLOT1_PARTITION		slot1_partition
@@ -351,6 +357,8 @@ static int img_mgmt_get_unused_slot_area_id(unsigned int image)
 #error "Unsupported number of images"
 #endif
 
+#endif /* !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
+
 int img_mgmt_vercmp(const struct image_version *a, const struct image_version *b)
 {
 	if (a->iv_major < b->iv_major) {
@@ -381,6 +389,58 @@ int img_mgmt_vercmp(const struct image_version *a, const struct image_version *b
 
 	return 0;
 }
+
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+
+int img_mgmt_erase_slot(int slot)
+{
+	psa_status_t status_psa;
+	psa_fwu_component_info_t info_fwu;
+	int image = img_mgmt_slot_to_image(slot);
+	int active_slot = img_mgmt_active_slot(image);
+	psa_fwu_component_t comp_id = image;
+	const int max_slot = 2 * CONFIG_MCUMGR_GRP_IMG_UPDATABLE_IMAGE_NUMBER;
+
+	if (slot >= max_slot) {
+		LOG_ERR("Invalid slot (%d), Valid range: 0-%d", slot, max_slot - 1);
+		return IMG_MGMT_ERR_INVALID_SLOT;
+	}
+
+	if (slot == active_slot) {
+		LOG_ERR("Cannot erase active slot (%d)", slot);
+		return IMG_MGMT_ERR_INVALID_SLOT;
+	}
+
+	psa_fwu_cancel(comp_id);
+	psa_fwu_clean(comp_id);
+
+	status_psa = psa_fwu_query(comp_id, &info_fwu);
+	if (status_psa != PSA_SUCCESS) {
+		LOG_ERR("psa_fwu_query(%d) fails: %d", comp_id, status_psa);
+		return IMG_MGMT_ERR_UNKNOWN;
+	}
+
+	/* Erase is run inside psa_fwu_cancel or psa_fwu_clean without slot being
+	 * in use. Regard the erase as OK if the component can return to READY state.
+	 */
+	switch (info_fwu.state) {
+	case PSA_FWU_READY:
+		return IMG_MGMT_ERR_OK;
+	case PSA_FWU_WRITING:
+	case PSA_FWU_CANDIDATE:
+	case PSA_FWU_STAGED:
+	case PSA_FWU_FAILED:
+	case PSA_FWU_TRIAL:
+	case PSA_FWU_REJECTED:
+	case PSA_FWU_UPDATED:
+		return IMG_MGMT_ERR_UNKNOWN;
+	default:
+		LOG_ERR("Unrecognized PSA FWU component state: %d", info_fwu.state);
+		return IMG_MGMT_ERR_UNKNOWN;
+	}
+}
+
+#else
 
 int img_mgmt_erase_slot(int slot)
 {
@@ -646,6 +706,8 @@ int img_mgmt_swap_type(int slot)
 	}
 }
 
+#endif /* defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
+
 /**
  * Verifies an upload request and indicates the actions that should be taken
  * during processing of the request.  This is a "read only" function in the
@@ -663,8 +725,10 @@ int img_mgmt_upload_inspect(const struct img_mgmt_upload_req *req,
 			    struct img_mgmt_upload_action *action)
 {
 	const struct image_header *hdr;
+#if !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
 	struct image_version cur_ver;
 	int rc;
+#endif /* !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
 
 	memset(action, 0, sizeof(*action));
 
@@ -677,7 +741,9 @@ int img_mgmt_upload_inspect(const struct img_mgmt_upload_req *req,
 
 	if (req->off == 0) {
 		/* First upload chunk. */
+#if !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
 		const struct flash_area *fa;
+#endif /* !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
 #if defined(CONFIG_MCUMGR_GRP_IMG_TOO_LARGE_SYSBUILD) &&                                           \
 	(defined(CONFIG_MCUBOOT_BOOTLOADER_MODE_SWAP_USING_OFFSET) ||                              \
 	 defined(CONFIG_MCUBOOT_BOOTLOADER_MODE_SWAP_USING_MOVE) ||                                \
@@ -737,6 +803,7 @@ int img_mgmt_upload_inspect(const struct img_mgmt_upload_req *req,
 			}
 		}
 
+#if !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
 		action->area_id = img_mgmt_get_unused_slot_area_id(req->image);
 		if (action->area_id < 0) {
 			/* No slot available to upload to */
@@ -880,9 +947,12 @@ skip_size_check:
 
 		action->erase = !empty;
 #endif
+#endif /* !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
 	} else {
 		/* Continuation of upload. */
+#if !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
 		action->area_id = g_img_mgmt_state.area_id;
+#endif /* !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
 		action->size = g_img_mgmt_state.size;
 
 		if (req->off != g_img_mgmt_state.off) {

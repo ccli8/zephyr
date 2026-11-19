@@ -32,6 +32,10 @@
 #include <mgmt/mcumgr/transport/smp_internal.h>
 #endif
 
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+#include <psa/update.h>
+#endif
+
 LOG_MODULE_DECLARE(mcumgr_img_grp, CONFIG_MCUMGR_GRP_IMG_LOG_LEVEL);
 
 #ifndef CONFIG_MCUMGR_GRP_IMG_FRUGAL_LIST
@@ -157,6 +161,50 @@ img_mgmt_state_flags(int query_slot)
 	return flags;
 }
 #endif
+
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+int img_mgmt_get_next_boot_slot(int image, enum img_mgmt_next_boot_type *type)
+{
+	const int active_slot = img_mgmt_active_slot(image);
+	int slot = img_mgmt_get_opposite_slot(active_slot);
+	enum img_mgmt_next_boot_type lt = NEXT_BOOT_TYPE_NORMAL;
+	psa_status_t status_psa;
+	psa_fwu_component_info_t info_fwu;
+	psa_fwu_component_t comp_id = image;
+
+	status_psa = psa_fwu_query(comp_id, &info_fwu);
+	if (status_psa != PSA_SUCCESS) {
+		LOG_ERR("psa_fwu_query(%d) fails: %d", comp_id, status_psa);
+		return -1;
+	}
+
+	switch (info_fwu.state) {
+	case PSA_FWU_READY:
+	case PSA_FWU_WRITING:
+	case PSA_FWU_CANDIDATE:
+	case PSA_FWU_FAILED:
+	case PSA_FWU_UPDATED:
+		slot = active_slot;
+		break;
+	case PSA_FWU_STAGED:
+		lt = NEXT_BOOT_TYPE_TEST;
+		break;
+	case PSA_FWU_TRIAL:
+	case PSA_FWU_REJECTED:
+		lt = NEXT_BOOT_TYPE_REVERT;
+		break;
+	default:
+		LOG_ERR("Unrecognized PSA FWU component state: %d", info_fwu.state);
+		return -1;
+	}
+
+	if (type != NULL) {
+		*type = lt;
+	}
+
+	return slot;
+}
+#else
 
 #if !defined(CONFIG_MCUBOOT_BOOTLOADER_MODE_DIRECT_XIP) &&                                         \
 	!defined(CONFIG_MCUBOOT_BOOTLOADER_MODE_DIRECT_XIP_WITH_REVERT) &&                         \
@@ -360,6 +408,7 @@ out:
 	* !defined(CONFIG_MCUBOOT_BOOTLOADER_MODE_RAM_LOAD_WITH_REVERT) &&                         \
 	* !defined(CONFIG_MCUBOOT_BOOTLOADER_MODE_FIRMWARE_UPDATER)                                \
 	*/
+#endif /* defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
 
 /**
  * Indicates whether any image slot is pending (i.e., whether a test swap will
@@ -809,6 +858,68 @@ int img_mgmt_set_next_boot_slot(int slot, bool confirm)
  * Command handler: image state write
  */
 int
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+img_mgmt_state_write(struct smp_streamer *ctxt)
+{
+	bool confirm = false;
+	size_t decoded = 0;
+	bool ok;
+	struct zcbor_string zhash = { 0 };
+	psa_status_t status_psa;
+
+	struct zcbor_map_decode_key_val image_list_decode[] = {
+		ZCBOR_MAP_DECODE_KEY_DECODER("hash", zcbor_bstr_decode, &zhash),
+		ZCBOR_MAP_DECODE_KEY_DECODER("confirm", zcbor_bool_decode, &confirm)
+	};
+
+	zcbor_state_t *zse = ctxt->writer->zs;
+	zcbor_state_t *zsd = ctxt->reader->zs;
+
+	ok = zcbor_map_decode_bulk(zsd, image_list_decode,
+		ARRAY_SIZE(image_list_decode), &decoded) == 0;
+
+	if (!ok) {
+		return MGMT_ERR_EINVAL;
+	}
+
+	img_mgmt_take_lock();
+
+	if (zhash.len != 0) {
+		LOG_WRN("For PSA FWU, target the whole device instead of separate component");
+	}
+
+	if (confirm) {
+		status_psa = psa_fwu_accept();
+		if (status_psa == PSA_SUCCESS) {
+			LOG_INF("psa_fwu_accept succeeds");
+		} else {
+			LOG_ERR("psa_fwu_accept fails: %d", status_psa);
+			ok = smp_add_cmd_err(zse, MGMT_GROUP_ID_IMAGE, IMG_MGMT_ERR_UNKNOWN);
+			goto end;
+		}
+	} else {
+		status_psa = psa_fwu_install();
+		if (status_psa == PSA_SUCCESS) {
+			LOG_INF("psa_fwu_install succeeds");
+		} else if (status_psa == PSA_SUCCESS_REBOOT || status_psa == PSA_SUCCESS_RESTART) {
+			LOG_INF("psa_fwu_install succeeds, system needs reboot");
+		} else {
+			LOG_ERR("psa_fwu_install fails: %d", status_psa);
+			ok = smp_add_cmd_err(zse, MGMT_GROUP_ID_IMAGE, IMG_MGMT_ERR_UNKNOWN);
+			goto end;
+		}
+	}
+
+end:
+	img_mgmt_release_lock();
+
+	if (!ok) {
+		return MGMT_ERR_EMSGSIZE;
+	}
+
+	return MGMT_ERR_EOK;
+}
+#else
 img_mgmt_state_write(struct smp_streamer *ctxt)
 {
 	bool confirm = false;
@@ -886,3 +997,4 @@ end:
 
 	return MGMT_ERR_EOK;
 }
+#endif /* defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */

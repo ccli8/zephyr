@@ -42,6 +42,10 @@
 #include <zephyr/retention/blinfo.h>
 #endif
 
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+#include <psa/update.h>
+#endif
+
 #if !defined(CONFIG_MCUBOOT_BOOTLOADER_MODE_RAM_LOAD)
 
 #if defined(CONFIG_FLASH_USES_MAPPED_PARTITION)
@@ -133,6 +137,18 @@ BUILD_ASSERT(sizeof(struct image_header) == IMAGE_HEADER_SIZE,
 #define SLOTS_PER_IMAGE 2
 #endif
 
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+BUILD_ASSERT(TFM_FWU_MAX_DIGEST_SIZE == IMAGE_SHA_LEN,
+	     "Check CONFIG_MCUBOOT_BOOTLOADER_USES_SHA512 for required hash size");
+
+#undef ACTIVE_IMAGE_IS
+#if CONFIG_MCUMGR_GRP_IMG_UPDATABLE_IMAGE_NUMBER == 1
+#define ACTIVE_IMAGE_IS 0
+#else
+#define ACTIVE_IMAGE_IS 1
+#endif
+#endif
+
 LOG_MODULE_REGISTER(mcumgr_img_grp, CONFIG_MCUMGR_GRP_IMG_LOG_LEVEL);
 
 struct img_mgmt_state g_img_mgmt_state;
@@ -209,6 +225,7 @@ static bool img_mgmt_slot_max_size(size_t *area_sizes, zcbor_state_t *zse)
 }
 #endif
 
+#if !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
 /**
  * Finds the TLVs in the specified image slot, if any.
  */
@@ -233,6 +250,7 @@ static int img_mgmt_find_tlvs(int slot, size_t *start_off, size_t *end_off, uint
 
 	return IMG_MGMT_ERR_OK;
 }
+#endif /* !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
 
 int img_mgmt_active_slot(int image)
 {
@@ -275,6 +293,99 @@ int img_mgmt_active_image(void)
 /*
  * Reads the version and build hash from the specified image slot.
  */
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+int img_mgmt_read_info(int image_slot, struct image_version *ver, uint8_t *hash, uint32_t *flags)
+{
+	int image = img_mgmt_slot_to_image(image_slot);
+	psa_status_t status_psa;
+	psa_fwu_component_info_t info_fwu;
+	int active_slot = img_mgmt_active_slot(image);
+	psa_fwu_component_t comp_id = image;
+
+	/* Query the component. */
+	status_psa = psa_fwu_query(comp_id, &info_fwu);
+	if (status_psa != PSA_SUCCESS) {
+		LOG_ERR("psa_fwu_query(%d) fails: %d", comp_id, status_psa);
+		return IMG_MGMT_ERR_UNKNOWN;
+	}
+
+	/* Check if secondary slot is empty */
+	if (image_slot != active_slot) {
+		switch (info_fwu.state) {
+		case PSA_FWU_READY:
+		case PSA_FWU_WRITING:
+		case PSA_FWU_FAILED:
+		case PSA_FWU_UPDATED:
+			return IMG_MGMT_ERR_NO_IMAGE;
+		case PSA_FWU_CANDIDATE:
+		case PSA_FWU_STAGED:
+		case PSA_FWU_TRIAL:
+		case PSA_FWU_REJECTED:
+			break;
+		default:
+			LOG_ERR("Unrecognized PSA FWU component state: %d", info_fwu.state);
+			return IMG_MGMT_ERR_UNKNOWN;
+		}
+	}
+
+	/* Populate image version
+	 *
+	 * PSA Firmware Update reports image version only for primary slot.
+	 *
+	 * Otherwise, make a dummy one with all 0xFF values.
+	 */
+	if (ver != NULL) {
+		if (image_slot == active_slot) {
+			ver->iv_major = info_fwu.version.major;
+			ver->iv_minor = info_fwu.version.minor;
+			ver->iv_revision = info_fwu.version.patch;
+			ver->iv_build_num = info_fwu.version.build;
+		} else {
+			memset(ver, 0xFF, sizeof(*ver));
+		}
+	}
+
+	/* Populate image hash
+	 *
+	 * PSA Firmware Update reports image hash only for secondary slot.
+	 * It reports hash of image chunks which have been uploaded. When
+	 * the upload process completes, the image state would change to
+	 * CANDIDATE or STAGED. In that condition, the hash value is correct.
+	 *
+	 * Otherwise, make a dummy one with all 0xFF values.
+	 */
+	if (hash != NULL) {
+		if (image_slot == active_slot) {
+			memset(hash, 0xFF, IMAGE_SHA_LEN);
+		} else {
+			switch (info_fwu.state) {
+			case PSA_FWU_WRITING:
+			case PSA_FWU_CANDIDATE:
+				memcpy(hash, info_fwu.impl.candidate_digest, IMAGE_SHA_LEN);
+				break;
+			case PSA_FWU_READY:
+			case PSA_FWU_STAGED:
+			case PSA_FWU_FAILED:
+			case PSA_FWU_TRIAL:
+			case PSA_FWU_REJECTED:
+			case PSA_FWU_UPDATED:
+				memset(hash, 0xFF, IMAGE_SHA_LEN);
+				break;
+			default:
+				LOG_ERR("Unrecognized PSA FWU component state: %d", info_fwu.state);
+				return IMG_MGMT_ERR_UNKNOWN;
+			}
+		}
+	}
+
+	/* Populate image flags */
+	if (flags != NULL) {
+		*flags = 0;
+	}
+
+	return IMG_MGMT_ERR_OK;
+}
+#else
 int img_mgmt_read_info(int image_slot, struct image_version *ver, uint8_t *hash, uint32_t *flags)
 {
 	struct image_header hdr;
@@ -378,6 +489,7 @@ int img_mgmt_read_info(int image_slot, struct image_version *ver, uint8_t *hash,
 
 	return 0;
 }
+#endif
 
 /*
  * Finds image given version number. Returns the slot number image is in,
@@ -531,8 +643,14 @@ static int img_mgmt_slot_info(struct smp_streamer *ctxt)
 	     zcbor_list_start_encode(zse, 10);
 
 	while (i < CONFIG_MCUMGR_GRP_IMG_UPDATABLE_IMAGE_NUMBER * SLOTS_PER_IMAGE) {
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+		psa_status_t status_psa;
+		psa_fwu_component_info_t info_fwu;
+		psa_fwu_component_t comp_id = img_mgmt_slot_to_image(i);
+#else
 		const struct flash_area *fa;
 		int area_id = img_mgmt_flash_area_id(i);
+#endif /* defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
 
 		if ((i % SLOTS_PER_IMAGE) == 0) {
 			memset(area_sizes, 0, sizeof(area_sizes));
@@ -556,24 +674,48 @@ static int img_mgmt_slot_info(struct smp_streamer *ctxt)
 			goto finish;
 		}
 
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+		status_psa = psa_fwu_query(comp_id, &info_fwu);
+		rc = (status_psa == PSA_SUCCESS) ? 0 : -1;
+#else
 		rc = flash_area_open(area_id, &fa);
+#endif /* defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
 
 		if (rc) {
 			/* Failed opening slot, mark as error */
 			ok = zcbor_tstr_put_lit(zse, "rc") &&
 			     zcbor_int32_put(zse, rc);
 
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+			LOG_ERR("psa_fwu_query(%d) fails: %d", comp_id, status_psa);
+#else
 			LOG_ERR("Failed to open slot %d for information fetching: %d", area_id, rc);
+#endif /* defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
 		} else {
 #if defined(CONFIG_MCUMGR_GRP_IMG_SLOT_INFO_HOOKS)
 			struct img_mgmt_slot_info_slot slot_info_data = {
 				.image = (i / SLOTS_PER_IMAGE),
 				.slot = (i % SLOTS_PER_IMAGE),
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+				.fa = NULL,
+#else
 				.fa = fa,
+#endif /* defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
 				.zse = zse,
 			};
 #endif
 
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+			if (sizeof(info_fwu.max_size) == sizeof(uint64_t)) {
+				ok = zcbor_tstr_put_lit(zse, "size") &&
+				     zcbor_uint64_put(zse, info_fwu.max_size);
+			} else {
+				ok = zcbor_tstr_put_lit(zse, "size") &&
+				     zcbor_uint32_put(zse, info_fwu.max_size);
+			}
+
+			area_sizes[(i % SLOTS_PER_IMAGE)] = info_fwu.max_size;
+#else
 			if (sizeof(fa->fa_size) == sizeof(uint64_t)) {
 				ok = zcbor_tstr_put_lit(zse, "size") &&
 				     zcbor_uint64_put(zse, fa->fa_size);
@@ -583,6 +725,7 @@ static int img_mgmt_slot_info(struct smp_streamer *ctxt)
 			}
 
 			area_sizes[(i % SLOTS_PER_IMAGE)] = fa->fa_size;
+#endif /* defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
 
 			if (!ok) {
 				goto finish;
@@ -612,7 +755,9 @@ static int img_mgmt_slot_info(struct smp_streamer *ctxt)
 						      &err_rc, &err_group);
 #endif
 
+#if !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
 			flash_area_close(fa);
+#endif /* !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
 
 #if defined(CONFIG_MCUMGR_GRP_IMG_SLOT_INFO_HOOKS)
 			if (status != MGMT_CB_OK) {
@@ -802,6 +947,12 @@ defined(CONFIG_MCUMGR_SMP_COMMAND_STATUS_HOOKS)
 	};
 #endif
 
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+	psa_status_t status_psa;
+	psa_fwu_component_info_t info_fwu;
+	psa_fwu_component_t comp_id;
+#endif /* defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
+
 	ok = zcbor_map_decode_bulk(zsd, image_upload_decode,
 		ARRAY_SIZE(image_upload_decode), &decoded) == 0;
 
@@ -810,6 +961,16 @@ defined(CONFIG_MCUMGR_SMP_COMMAND_STATUS_HOOKS)
 	if (!ok) {
 		return MGMT_ERR_EINVAL;
 	}
+
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+	if (req.image >= CONFIG_MCUMGR_GRP_IMG_UPDATABLE_IMAGE_NUMBER) {
+		LOG_ERR("req.image (%d) must be less than "
+			"CONFIG_MCUMGR_GRP_IMG_UPDATABLE_IMAGE_NUMBER (%d)",
+			req.image, CONFIG_MCUMGR_GRP_IMG_UPDATABLE_IMAGE_NUMBER);
+		return MGMT_ERR_EINVAL;
+	}
+	comp_id = req.image;
+#endif /* defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
 
 	img_mgmt_take_lock();
 
@@ -892,6 +1053,52 @@ defined(CONFIG_MCUMGR_SMP_COMMAND_STATUS_HOOKS)
 		memset(&g_img_mgmt_state.data_sha[req.data_sha.len], 0,
 			   IMG_MGMT_DATA_SHA_LEN - req.data_sha.len);
 
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+		status_psa = psa_fwu_query(comp_id, &info_fwu);
+		if (status_psa != PSA_SUCCESS) {
+			LOG_ERR("psa_fwu_query(%d) fails: %d", comp_id, status_psa);
+			ok = false;
+			goto end;
+		}
+		LOG_INF("FWU process state: %d", info_fwu.state);
+
+		/* Prepare for new FWU process */
+		switch (info_fwu.state) {
+		case PSA_FWU_READY:
+			/* Ready for next one */
+			break;
+		case PSA_FWU_WRITING:
+		case PSA_FWU_CANDIDATE:
+			/* Cancel previous one */
+			psa_fwu_cancel(comp_id);
+			psa_fwu_clean(comp_id);
+			break;
+		case PSA_FWU_UPDATED:
+		case PSA_FWU_FAILED:
+			/* Finalize previous one */
+			psa_fwu_clean(comp_id);
+			break;
+		case PSA_FWU_STAGED:
+		case PSA_FWU_TRIAL:
+		case PSA_FWU_REJECTED:
+			/* Cannot get out of previous one halfway, should fail */
+			break;
+		default:
+			LOG_ERR("Unrecognized PSA FWU component state: %d", info_fwu.state);
+			ok = false;
+			goto end;
+		}
+
+		/* New update session */
+		LOG_INF("FWU component ID: %d", comp_id);
+		status_psa = psa_fwu_start(comp_id, NULL, 0);
+		if (status_psa != PSA_SUCCESS) {
+			LOG_ERR("psa_fwu_start (comp=%d) fails: %d", comp_id, status_psa);
+			ok = false;
+			goto end;
+		}
+#endif /* defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
+
 #ifdef CONFIG_IMG_ENABLE_IMAGE_CHECK
 		/* Check if the existing image hash matches the hash of the underlying data,
 		 * this check can only be performed if the provided hash is a full SHA256 hash
@@ -923,6 +1130,10 @@ defined(CONFIG_MCUMGR_SMP_COMMAND_STATUS_HOOKS)
 #ifndef CONFIG_IMG_ERASE_PROGRESSIVELY
 		/* erase the entire req.size all at once */
 		if (action.erase) {
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+			/* Should have done inside psa_fwu_start */
+			rc = 0;
+#else
 			rc = img_mgmt_erase_image_data(0, req.size);
 			if (rc != 0) {
 				IMG_MGMT_UPLOAD_ACTION_SET_RC_RSN(&action,
@@ -930,6 +1141,7 @@ defined(CONFIG_MCUMGR_SMP_COMMAND_STATUS_HOOKS)
 				ok = smp_add_cmd_err(zse, MGMT_GROUP_ID_IMAGE, rc);
 				goto end;
 			}
+#endif
 		}
 #endif
 	} else {
@@ -945,8 +1157,31 @@ defined(CONFIG_MCUMGR_SMP_COMMAND_STATUS_HOOKS)
 			last = true;
 		}
 
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+		status_psa = psa_fwu_write(comp_id, req.off, req.img_data.value,
+					   action.write_bytes);
+		if (status_psa != PSA_SUCCESS) {
+			LOG_ERR("psa_fwu_write(component=%d, offset=0x%08x, block=0x%08x, "
+				"size=0x%08x)"
+				" failed: %d",
+				comp_id, req.off, (unsigned int)req.img_data.value,
+				action.write_bytes, status_psa);
+			ok = false;
+			goto end;
+		}
+
+		status_psa = !last ? PSA_SUCCESS : psa_fwu_finish(comp_id);
+		if (status_psa != PSA_SUCCESS) {
+			LOG_ERR("psa_fwu_finish(comp=%d) fails: %d", comp_id, status_psa);
+			ok = false;
+			goto end;
+		}
+
+		rc = 0;
+#else
 		rc = img_mgmt_write_image_data(req.off, req.img_data.value, action.write_bytes,
 						    last);
+#endif
 		if (rc == 0) {
 			g_img_mgmt_state.off += action.write_bytes;
 		} else {

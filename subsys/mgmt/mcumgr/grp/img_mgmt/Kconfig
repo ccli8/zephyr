@@ -46,6 +46,7 @@ endif
 
 config MCUMGR_GRP_IMG_UPDATABLE_IMAGE_NUMBER
 	int "Number of supported images"
+	default TFM_MCUBOOT_IMAGE_NUMBER if TFM_PARTITION_FIRMWARE_UPDATE
 	default UPDATEABLE_IMAGE_NUMBER
 	range 1 3
 	help
