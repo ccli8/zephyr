@@ -158,6 +158,21 @@ img_mgmt_state_flags(int query_slot)
 }
 #endif
 
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+int img_mgmt_get_next_boot_slot(int image, enum img_mgmt_next_boot_type *type)
+{
+	const int active_slot = img_mgmt_active_slot(image);
+	int other_slot = img_mgmt_get_opposite_slot(active_slot);
+	enum img_mgmt_next_boot_type lt = NEXT_BOOT_TYPE_NORMAL;
+
+	if (type != NULL) {
+		*type = lt;
+	}
+
+	return other_slot;
+}
+#else
+
 #if !defined(CONFIG_MCUBOOT_BOOTLOADER_MODE_DIRECT_XIP) &&                                         \
 	!defined(CONFIG_MCUBOOT_BOOTLOADER_MODE_DIRECT_XIP_WITH_REVERT) &&                         \
 	!defined(CONFIG_MCUBOOT_BOOTLOADER_MODE_RAM_LOAD) &&                                       \
@@ -360,6 +375,7 @@ out:
 	* !defined(CONFIG_MCUBOOT_BOOTLOADER_MODE_RAM_LOAD_WITH_REVERT) &&                         \
 	* !defined(CONFIG_MCUBOOT_BOOTLOADER_MODE_FIRMWARE_UPDATER)                                \
 	*/
+#endif /* defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
 
 /**
  * Indicates whether any image slot is pending (i.e., whether a test swap will

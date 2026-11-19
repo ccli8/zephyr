@@ -42,6 +42,10 @@
 #include <zephyr/retention/blinfo.h>
 #endif
 
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+#include <psa/update.h>
+#endif
+
 #if !defined(CONFIG_MCUBOOT_BOOTLOADER_MODE_RAM_LOAD)
 
 #if defined(CONFIG_FLASH_USES_MAPPED_PARTITION)
@@ -131,6 +135,18 @@ BUILD_ASSERT(sizeof(struct image_header) == IMAGE_HEADER_SIZE,
 #define SLOTS_PER_IMAGE 1
 #else
 #define SLOTS_PER_IMAGE 2
+#endif
+
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+BUILD_ASSERT(TFM_FWU_MAX_DIGEST_SIZE == IMAGE_SHA_LEN,
+	     "Check CONFIG_MCUBOOT_BOOTLOADER_USES_SHA512 for required hash size");
+
+#undef ACTIVE_IMAGE_IS
+#if CONFIG_MCUMGR_GRP_IMG_UPDATABLE_IMAGE_NUMBER == 1
+#define ACTIVE_IMAGE_IS 0
+#else
+#define ACTIVE_IMAGE_IS 1
+#endif
 #endif
 
 LOG_MODULE_REGISTER(mcumgr_img_grp, CONFIG_MCUMGR_GRP_IMG_LOG_LEVEL);
@@ -275,6 +291,55 @@ int img_mgmt_active_image(void)
 /*
  * Reads the version and build hash from the specified image slot.
  */
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+int img_mgmt_read_info(int image_slot, struct image_version *ver, uint8_t *hash, uint32_t *flags)
+{
+	psa_status_t status;
+	psa_fwu_component_info_t info;
+	int image_id = img_mgmt_slot_to_image(image_slot);
+	int active_slot = img_mgmt_active_slot(image_id);
+
+	/* Query the component. */
+	status = psa_fwu_query(image_id, &info);
+	if (status != PSA_SUCCESS) {
+		LOG_ERR("Query fails: %d", status);
+		return IMG_MGMT_ERR_UNKNOWN;
+	}
+
+	/* Copy image version
+	 *
+	 * PSA Firmware Update reports image version only for primary slot.
+	 * Otherwise, make a dummy one with slot number encoded.
+	 */
+	if (ver != NULL) {
+		if (image_slot == active_slot) {
+			ver->iv_major = info.version.major;
+			ver->iv_minor = info.version.minor;
+			ver->iv_revision = info.version.patch;
+			ver->iv_build_num = info.version.build;
+		} else {
+			memset(ver, 0xFF, sizeof(*ver));
+			ver->iv_build_num = image_slot;
+		}
+	}
+
+	/* Copy image hash
+	 *
+	 * PSA Firmware Update reports image hash only for secondary slot.
+	 * Otherwise, make a dummy one with slot number encoded.
+	 */
+	if (hash != NULL) {
+		if (image_slot == active_slot) {
+			memset(hash, 0xFF, IMAGE_SHA_LEN);
+			hash[IMAGE_SHA_LEN - 1] = (uint8_t)image_slot;
+		} else {
+			memcpy(hash, info.impl.candidate_digest, IMAGE_SHA_LEN);
+		}
+	}
+
+	return IMG_MGMT_ERR_OK;
+}
+#else
 int img_mgmt_read_info(int image_slot, struct image_version *ver, uint8_t *hash, uint32_t *flags)
 {
 	struct image_header hdr;
@@ -378,6 +443,7 @@ int img_mgmt_read_info(int image_slot, struct image_version *ver, uint8_t *hash,
 
 	return 0;
 }
+#endif
 
 /*
  * Finds image given version number. Returns the slot number image is in,
