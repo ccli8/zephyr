@@ -677,7 +677,9 @@ int img_mgmt_upload_inspect(const struct img_mgmt_upload_req *req,
 
 	if (req->off == 0) {
 		/* First upload chunk. */
+#if !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
 		const struct flash_area *fa;
+#endif /* !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
 #if defined(CONFIG_MCUMGR_GRP_IMG_TOO_LARGE_SYSBUILD) &&                                           \
 	(defined(CONFIG_MCUBOOT_BOOTLOADER_MODE_SWAP_USING_OFFSET) ||                              \
 	 defined(CONFIG_MCUBOOT_BOOTLOADER_MODE_SWAP_USING_MOVE) ||                                \
@@ -737,6 +739,7 @@ int img_mgmt_upload_inspect(const struct img_mgmt_upload_req *req,
 			}
 		}
 
+#if !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
 		action->area_id = img_mgmt_get_unused_slot_area_id(req->image);
 		if (action->area_id < 0) {
 			/* No slot available to upload to */
@@ -880,9 +883,12 @@ skip_size_check:
 
 		action->erase = !empty;
 #endif
+#endif /* !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
 	} else {
 		/* Continuation of upload. */
+#if !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
 		action->area_id = g_img_mgmt_state.area_id;
+#endif /* !defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
 		action->size = g_img_mgmt_state.size;
 
 		if (req->off != g_img_mgmt_state.off) {

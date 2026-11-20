@@ -298,11 +298,12 @@ int img_mgmt_read_info(int image_slot, struct image_version *ver, uint8_t *hash,
 	psa_fwu_component_info_t info;
 	int image_id = img_mgmt_slot_to_image(image_slot);
 	int active_slot = img_mgmt_active_slot(image_id);
+	psa_fwu_component_t comp_id = image_id;
 
 	/* Query the component. */
-	status = psa_fwu_query(image_id, &info);
+	status = psa_fwu_query(comp_id, &info);
 	if (status != PSA_SUCCESS) {
-		LOG_ERR("Query fails: %d", status);
+		LOG_ERR("Query fails (comp=%d): %d", comp_id, status);
 		return IMG_MGMT_ERR_UNKNOWN;
 	}
 
@@ -868,6 +869,11 @@ defined(CONFIG_MCUMGR_SMP_COMMAND_STATUS_HOOKS)
 	};
 #endif
 
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+	psa_status_t status;
+	psa_fwu_component_t comp_id = req.image;
+#endif /* defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
+
 	ok = zcbor_map_decode_bulk(zsd, image_upload_decode,
 		ARRAY_SIZE(image_upload_decode), &decoded) == 0;
 
@@ -958,6 +964,17 @@ defined(CONFIG_MCUMGR_SMP_COMMAND_STATUS_HOOKS)
 		memset(&g_img_mgmt_state.data_sha[req.data_sha.len], 0,
 			   IMG_MGMT_DATA_SHA_LEN - req.data_sha.len);
 
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+		/* New update session */
+		psa_fwu_clean(req.image);
+		status = psa_fwu_start(comp_id, NULL, 0);
+		if (status != PSA_SUCCESS) {
+			LOG_ERR("psa_fwu_start (comp=%d) fails: %d", comp_id, status);
+			ok = false;
+			goto end;
+		}
+#endif /* defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE) */
+
 #ifdef CONFIG_IMG_ENABLE_IMAGE_CHECK
 		/* Check if the existing image hash matches the hash of the underlying data,
 		 * this check can only be performed if the provided hash is a full SHA256 hash
@@ -1011,8 +1028,28 @@ defined(CONFIG_MCUMGR_SMP_COMMAND_STATUS_HOOKS)
 			last = true;
 		}
 
+#if defined(CONFIG_TFM_PARTITION_FIRMWARE_UPDATE)
+		status = psa_fwu_write(comp_id, req.off, req.img_data.value, action.write_bytes);
+		if (status != PSA_SUCCESS) {
+			LOG_ERR("psa_fwu_write(ocomp=%d, ffset=0x%08x, block=0x%08x, size=0x%08x)"
+				" failed: %d",
+				comp_id, req.off, req.img_data.value, action.write_bytes, status);
+			ok = false;
+			goto end;
+		}
+
+		status = !last ? PSA_SUCCESS : psa_fwu_finish(comp_id);
+		if (status != PSA_SUCCESS) {
+			LOG_ERR("psa_fwu_finish(comp=%d) fails: %d", comp_id, status);
+			ok = false;
+			goto end;
+		}
+
+		rc = 0;
+#else
 		rc = img_mgmt_write_image_data(req.off, req.img_data.value, action.write_bytes,
 						    last);
+#endif
 		if (rc == 0) {
 			g_img_mgmt_state.off += action.write_bytes;
 		} else {
